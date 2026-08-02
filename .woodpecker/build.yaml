@@ -1,0 +1,35 @@
+when:
+  - event: [push, pull_request, manual]
+
+steps:
+  - name: build
+    image: registry.fedoraproject.org/fedora:44
+    commands:
+      # dnf5-plugins provides `dnf builddep`, rpmdevtools provides `spectool`.
+      # Note the absence of git: mango's meson.build changes the version string
+      # it compiles in when git is on PATH, and %{_builddir} is not a checkout.
+      # Woodpecker's clone runs in its own container, so nothing here needs it.
+      - dnf -y install rpm-build rpmdevtools dnf5-plugins createrepo_c
+      - ./scripts/build.sh
+
+# Woodpecker has no built-in artifact store: the RPMs land in ./output in the
+# pipeline workspace and are discarded when the pipeline ends. The build log
+# gets the file listing and sha256sums. To actually keep them, uncomment and
+# fill in one of the steps below.
+#
+#  - name: publish
+#    image: woodpeckerci/plugin-gitea-release
+#    settings:
+#      base_url: https://git.example.org
+#      files: output/*.rpm
+#      api_key:
+#        from_secret: gitea_token
+#    when:
+#      - event: tag
+#
+#  - name: publish
+#    image: alpine
+#    commands:
+#      - apk add --no-cache rsync openssh-client
+#      - rsync -av --delete output/ user@repo.example.org:/srv/www/fedora/44/
+#    secrets: [ssh_key]

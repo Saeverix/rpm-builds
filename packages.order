@@ -1,0 +1,7 @@
+# Packages to build, in dependency order, one directory name under packages/
+# per line. Order matters: each package is added to a local dnf repo as soon as
+# it is built, so later entries can BuildRequire earlier ones.
+
+# mango needs scenefx-devel, so scenefx has to come first.
+scenefx
+mango

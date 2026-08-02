@@ -1,0 +1,8 @@
+# rpmbuild tree and finished packages
+/_build/
+/output/
+
+# downloaded upstream tarballs, in case anything drops them at the top level
+*.tar.gz
+*.tar.xz
+*.rpm
