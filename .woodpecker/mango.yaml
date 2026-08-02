@@ -9,8 +9,14 @@
 # defined against a diff, and what a tag event diffs against is not something to
 # rely on; a tag name is unambiguous. Both prefixes are accepted because this
 # workflow owns both packages -- tagging either builds and publishes the pair.
+#
+# The manual clause exists because Woodpecker is only reachable on the LAN, so
+# GitHub cannot deliver the webhook that a tag push would need. Triggering by
+# hand with PACKAGE=mango runs this workflow and not fish's; without that
+# variable neither workflow matches and the pipeline does nothing, which is
+# deliberate -- a bare manual run should not rebuild everything.
 when:
-  - event: [push, pull_request, manual]
+  - event: [push, pull_request]
     path:
       include:
         - packages/mango/**
@@ -21,6 +27,8 @@ when:
       include:
         - refs/tags/mango-*
         - refs/tags/scenefx-*
+  - event: manual
+    evaluate: 'PACKAGE == "mango"'
 
 steps:
   - name: build
@@ -62,8 +70,10 @@ steps:
   # up. The cluster therefore holds no signing material at all.
   - name: publish
     image: registry.fedoraproject.org/fedora:44
+    # Manual is here only because tag events cannot reach this server yet. Once
+    # Woodpecker receives GitHub webhooks, drop it and go back to tags only.
     when:
-      - event: tag
+      - event: [tag, manual]
     environment:
       REPO_HOST:
         from_secret: rpm_repo_host

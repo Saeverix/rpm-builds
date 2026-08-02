@@ -2,8 +2,14 @@
 # defined against a diff, and what a tag event diffs against is not something to
 # rely on; a tag name is unambiguous. So `fish-4.8.1-1` publishes fish and
 # touches nothing else.
+#
+# The manual clause exists because Woodpecker is only reachable on the LAN, so
+# GitHub cannot deliver the webhook that a tag push would need. Triggering by
+# hand with PACKAGE=fish runs this workflow and not mango's; without that
+# variable neither workflow matches and the pipeline does nothing, which is
+# deliberate -- a bare manual run should not rebuild everything.
 when:
-  - event: [push, pull_request, manual]
+  - event: [push, pull_request]
     path:
       include:
         - packages/fish/**
@@ -12,6 +18,8 @@ when:
     ref:
       include:
         - refs/tags/fish-*
+  - event: manual
+    evaluate: 'PACKAGE == "fish"'
 
 steps:
   - name: build
@@ -78,8 +86,10 @@ steps:
   # up. The cluster therefore holds no signing material at all.
   - name: publish
     image: registry.fedoraproject.org/fedora:44
+    # Manual is here only because tag events cannot reach this server yet. Once
+    # Woodpecker receives GitHub webhooks, drop it and go back to tags only.
     when:
-      - event: tag
+      - event: [tag, manual]
     environment:
       REPO_HOST:
         from_secret: rpm_repo_host

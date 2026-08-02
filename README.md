@@ -119,6 +119,24 @@ git tag fish-4.8.1-1 && git push --tags
 Tags are matched on `ref` rather than on changed paths, because a path filter is
 evaluated against a diff and what a tag diffs against is not worth relying on.
 
+### Triggering by hand
+
+The Woodpecker server is only reachable on the LAN, so GitHub cannot deliver the
+webhook a tag push needs — until that changes, tags build nothing on their own.
+Trigger a manual pipeline instead and set a `PACKAGE` variable to pick the
+workflow:
+
+| `PACKAGE` | Runs |
+| --- | --- |
+| `mango` | `mango.yaml` — builds and publishes scenefx, scenefx-devel, mango |
+| `fish` | `fish.yaml` — builds and publishes fish |
+
+Omitting the variable matches neither workflow and the pipeline does nothing;
+that is deliberate, so a stray manual run does not rebuild every package. Manual
+runs publish, which tag-only runs would not — the `manual` entry in each publish
+step's `when:` is there purely to cover the missing webhook, and should be
+removed once tags work.
+
 Only binary RPMs are published. `-debuginfo`, `-debugsource` and the SRPM are
 filtered out — they are all rebuildable from the tagged spec. The repo keeps the
 newest three builds of each package, so a bad bump can be downgraded away; older
