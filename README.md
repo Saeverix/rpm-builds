@@ -68,20 +68,32 @@ woodpecker-cli exec .woodpecker/mango.yaml
 > directory or in a throwaway volume. If it is the latter, use the fallback
 > below when you actually want an installable RPM.
 
-Fallback — the same steps by hand in a container, with the workspace bind-mounted
-so the RPMs survive:
+Fallback without the CLI — extract the workflow's own commands and run them in a
+container, with the workspace bind-mounted so the RPMs survive. Change the
+filename to pick a different package:
 
 ```sh
 podman run --rm -v "$PWD:/w:Z" -w /w registry.fedoraproject.org/fedora:44 sh -c '
-  dnf -y install rpm-build rpmdevtools dnf5-plugins &&
-  mkdir -p _build/SOURCES output &&
-  for p in scenefx mango; do
-    spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/$p/$p.spec &&
-    dnf -y builddep packages/$p/$p.spec &&
-    rpmbuild --define "_topdir $PWD/_build" -ba packages/$p/$p.spec &&
-    dnf -y install $(ls _build/RPMS/x86_64/*.rpm | grep -v -- -debug)
-  done &&
-  cp _build/RPMS/*/*.rpm output/'
+  dnf -y install python3-pyyaml >/dev/null 2>&1
+  python3 - <<PY > /tmp/step.sh
+import yaml
+print("set -ex")
+print("\n".join(yaml.safe_load(open(".woodpecker/fish.yaml"))["steps"][0]["commands"]))
+PY
+  sh /tmp/step.sh'
+```
+
+**Do not hand-copy the commands into a script instead.** Woodpecker joins a
+step's commands into one shell, so state leaks between them; a transcription that
+drifted from the YAML by a single `cd` is exactly how a working-directory bug
+once reached CI while passing locally. Running the YAML is the only faithful test.
+
+Cleaning up afterwards: fish's workflow builds as an unprivileged user, and under
+rootless podman that leaves `_build` owned by a subuid your account cannot delete.
+`rm -rf _build` fails with "Permission denied"; use this instead:
+
+```sh
+podman unshare rm -rf _build
 ```
 
 ## Publishing
