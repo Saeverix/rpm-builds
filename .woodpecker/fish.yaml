@@ -21,29 +21,38 @@ steps:
 
       # Vendor the cargo dependencies so %build can run with CARGO_NET_OFFLINE.
       # One block scalar, so it is unambiguously a single shell invocation.
+      #
+      # The whole thing runs in a ( subshell ) because Woodpecker concatenates a
+      # step's commands into ONE shell script: a bare `cd` in here would leak
+      # into every later command, and the relative spec paths below would then
+      # resolve against the wrong directory. The subshell makes that impossible
+      # no matter how this block is edited later.
       - |
-        VER=$(rpmspec -q --qf '%{version}\n' --srpm packages/fish/fish.spec)
-        cd _build/SOURCES
-        rm -rf "fish-$VER" vendor-tmp
-        tar xf "fish-$VER.tar.xz"
-        SRC=$PWD/fish-$VER
-        mkdir -p vendor-tmp/.cargo
-        # Run cargo vendor from inside vendor-tmp with NO output path argument.
-        # cargo writes whatever path it was given into config.toml verbatim, and
-        # this tarball gets unpacked at the root of the source tree, where the
-        # directory is plain "vendor". Passing an explicit path here bakes in one
-        # that does not exist at build time, and cargo then fails with
-        # "failed to read root of directory source". build_tools/make_vendor_tarball.sh
-        # cds for the same reason.
-        cd vendor-tmp
-        # The cat preserves upstream's [alias] xtask stanza, which cargo's
-        # generated [source] replacement would otherwise clobber. Both are needed.
-        { cat "$SRC/.cargo/config.toml"
-          cargo vendor --manifest-path "$SRC/Cargo.toml"
-        } > .cargo/config.toml
-        tar -cJf "../fish-$VER-vendor.tar.xz" vendor .cargo
-        cd ..
-        rm -rf "fish-$VER" vendor-tmp
+        (
+          set -e
+          VER=$(rpmspec -q --qf '%{version}\n' --srpm packages/fish/fish.spec)
+          cd _build/SOURCES
+          rm -rf "fish-$VER" vendor-tmp
+          tar xf "fish-$VER.tar.xz"
+          SRC=$PWD/fish-$VER
+          mkdir -p vendor-tmp/.cargo
+          # Run cargo vendor from inside vendor-tmp with NO output path argument.
+          # cargo writes whatever path it was given into config.toml verbatim, and
+          # this tarball gets unpacked at the root of the source tree, where the
+          # directory is plain "vendor". Passing an explicit path here bakes in one
+          # that does not exist at build time, and cargo then fails with
+          # "failed to read root of directory source". build_tools/make_vendor_tarball.sh
+          # cds for the same reason.
+          cd vendor-tmp
+          # The cat preserves upstream's [alias] xtask stanza, which cargo's
+          # generated [source] replacement would otherwise clobber. Both are needed.
+          { cat "$SRC/.cargo/config.toml"
+            cargo vendor --manifest-path "$SRC/Cargo.toml"
+          } > .cargo/config.toml
+          tar -cJf "../fish-$VER-vendor.tar.xz" vendor .cargo
+          cd ..
+          rm -rf "fish-$VER" vendor-tmp
+        )
 
       - dnf -y builddep packages/fish/fish.spec
 
