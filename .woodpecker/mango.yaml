@@ -120,11 +120,25 @@ steps:
 
       - rsync -av -e "$RSH" publish/ rpm-publish@$REPO_HOST:$REPO/
 
-      # Keep the newest 3 of each package, then refresh the metadata in place.
-      # repomanage reads RPM headers, so this is version-aware rather than
-      # lexical -- mango-0.15.10 correctly outranks mango-0.15.9.
-      - $RSH rpm-publish@$REPO_HOST "dnf repomanage --old --keep 3 $REPO | xargs -r rm -f && createrepo_c --update $REPO"
+      # Every direct ssh below MUST pass -n. Woodpecker feeds this script to the
+      # shell on stdin, and ssh without -n reads stdin as well -- it swallows the
+      # remaining lines as input for the remote command, so the step stops early
+      # and still reports success. That is exactly how the signing below got
+      # silently skipped once, leaving clients with no repomd.xml.asc. rsync is
+      # unaffected because it drives its own ssh.
+      #
+      # Prune first, then rebuild the metadata. repomanage reads RPM headers, so
+      # it is version-aware rather than lexical -- mango-0.15.10 correctly
+      # outranks mango-0.15.9. On a repo with no metadata yet it prints a curl
+      # error and lists nothing, which is harmless; there is nothing to prune on
+      # a first publish.
+      - $RSH -n rpm-publish@$REPO_HOST "dnf repomanage --old --keep 3 $REPO | xargs -r rm -f"
+      - $RSH -n rpm-publish@$REPO_HOST "createrepo_c --update $REPO"
 
-      - $RSH rpm-publish@$REPO_HOST "cat $REPO/repodata/repomd.xml" > repomd.xml
+      - $RSH -n rpm-publish@$REPO_HOST "cat $REPO/repodata/repomd.xml" > repomd.xml
       - gpg --batch --yes --detach-sign --armor -u "$FPR" -o repomd.xml.asc repomd.xml
       - rsync -av -e "$RSH" repomd.xml.asc rpm-publish@$REPO_HOST:$REPO/repodata/
+
+      # repo_gpgcheck=1 clients cannot load the repo at all without this file, and
+      # a step that ends early looks green -- so assert it landed.
+      - if ! $RSH -n rpm-publish@$REPO_HOST "test -s $REPO/repodata/repomd.xml.asc"; then echo 'repomd.xml.asc missing on the server'; exit 1; fi
