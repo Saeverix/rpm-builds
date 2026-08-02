@@ -1,65 +1,91 @@
 # rpm-builds
 
-RPM spec files for tools that are not in the Fedora repositories, built by
-Woodpecker CI. Currently targets **Fedora 44, x86_64**.
+RPM spec files for tools that are not in the Fedora repositories, or that Fedora
+ships too old, built by Woodpecker CI. Targets **Fedora 44, x86_64**.
 
 ## Packages
 
-| Package | Version | Upstream |
-| --- | --- | --- |
-| `scenefx`, `scenefx-devel` | 0.5.0 (tag `0.5`) | <https://github.com/wlrfx/scenefx> |
-| `mango` | 0.15.5 | <https://github.com/mangowm/mango> |
+| Package | Version | Workflow | Upstream |
+| --- | --- | --- | --- |
+| `scenefx`, `scenefx-devel` | 0.5.0 (tag `0.5`) | `mango` | <https://github.com/wlrfx/scenefx> |
+| `mango` | 0.15.5 | `mango` | <https://github.com/mangowm/mango> |
 
 `mango` is the MangoWM Wayland compositor. Its upstream build instructions tell
 you to build wlroots by hand, but that is not needed on Fedora 44 — the distro
-already ships `wlroots-0.20.2` and a `wlroots-devel` providing
-`wlroots-0.20.pc`, which is exactly what both `scenefx` and `mango` ask for.
-Building a second copy into `/usr` would collide with the distro package. Only
-`scenefx` and `mango` are built here.
+already ships `wlroots-0.20.2` and a `wlroots-devel` providing `wlroots-0.20.pc`,
+which is exactly what both `scenefx` and `mango` ask for. Building a second copy
+into `/usr` would collide with the distro package.
 
-`mango` links against `scenefx`, so `scenefx` is built first and published into
-a throwaway local dnf repo that `mango`'s `dnf builddep` then resolves against.
+`scenefx` exists here only because `mango` links against it, so the two share one
+workflow.
 
-## Building locally
+## Layout
 
-`scripts/build.sh` installs build dependencies and writes to
-`/etc/yum.repos.d`, so run it as root in a disposable container, never on your
-own system:
-
-```sh
-podman run --rm -v "$PWD:/w:Z" -w /w registry.fedoraproject.org/fedora:44 \
-  sh -c 'dnf -y install rpm-build rpmdevtools dnf5-plugins createrepo_c && ./scripts/build.sh'
+```
+.woodpecker/<workflow>.yaml    one workflow per thing you want to build
+packages/<name>/<name>.spec    one directory per source package
 ```
 
-The finished RPMs and SRPMs end up in `output/`. To rebuild a single package:
+Each file in `.woodpecker/` is an independent workflow. Woodpecker runs them in
+parallel on separate agents, and each one carries a `when: path:` filter so
+touching one package's spec does not rebuild the others. A package with a build
+dependency on another (mango on scenefx) just builds both in one workflow and
+`dnf install`s the intermediate result.
 
-```sh
-./scripts/build.sh mango
-```
-
-## CI
-
-`.woodpecker/build.yaml` runs the same script in a `fedora:44` container on
-push, pull request and manual trigger.
-
-Woodpecker has no built-in artifact store, so today the pipeline verifies that
-everything builds and prints sha256sums, but the RPMs themselves are discarded
-when the pipeline ends. Use the local podman command above when you actually
-want an installable RPM. `build.yaml` has commented-out publish steps for a
-Gitea release or an rsync-to-webserver dnf repo when you want to change that.
+There is no build script and no ordering file — ordering is the order of the
+commands in a workflow, and dependencies are whatever that workflow installs.
 
 ## Adding a package
 
 1. `packages/<name>/<name>.spec`
-2. Add `<name>` to `packages.order`, after anything it BuildRequires.
+2. `.woodpecker/<name>.yaml` — copy an existing one and change the spec paths and
+   the `path:` filter.
 
-Nothing else needs changing — `scripts/build.sh` is generic.
+## Building locally
+
+The CI definition is the build definition, so run it with the Woodpecker CLI
+rather than reimplementing it:
+
+```sh
+woodpecker-cli exec .woodpecker/mango.yaml
+```
+
+> Not yet verified whether `woodpecker-cli exec` leaves `output/` in your working
+> directory or in a throwaway volume. If it is the latter, use the fallback
+> below when you actually want an installable RPM.
+
+Fallback — the same steps by hand in a container, with the workspace bind-mounted
+so the RPMs survive:
+
+```sh
+podman run --rm -v "$PWD:/w:Z" -w /w registry.fedoraproject.org/fedora:44 sh -c '
+  dnf -y install rpm-build rpmdevtools dnf5-plugins &&
+  mkdir -p _build/SOURCES output &&
+  for p in scenefx mango; do
+    spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/$p/$p.spec &&
+    dnf -y builddep packages/$p/$p.spec &&
+    rpmbuild --define "_topdir $PWD/_build" -ba packages/$p/$p.spec &&
+    dnf -y install $(ls _build/RPMS/x86_64/*.rpm | grep -v -- -debug)
+  done &&
+  cp _build/RPMS/*/*.rpm output/'
+```
+
+## Publishing
+
+Not wired up yet. Woodpecker has no built-in artifact store — the maintainers
+closed that request as by-design
+([#1014](https://github.com/woodpecker-ci/woodpecker/issues/1014)) — so the
+workspace and everything in `output/` is destroyed when a pipeline ends. Today
+the pipeline is a build-verification gate only.
+
+The plan is a dnf repo hosted on the K3s cluster, published **on tags only**.
+`output/` already contains everything such a step needs.
 
 ## Conventions
 
 - Versions are pinned to upstream release tags. To update a package, bump
-  `Version` (and `%global tag` where upstream's tag differs from its version,
-  as with scenefx) and reset `Release` to `1%{?dist}`.
+  `Version` (and `%global tag` where upstream's tag differs from its version, as
+  with scenefx) and reset `Release` to `1%{?dist}`.
 - Non-obvious packaging decisions are commented in the spec files themselves,
-  next to the line they apply to. There are a few that look like mistakes and
-  are not — read the comment before "fixing" one.
+  next to the line they apply to. A few look like mistakes and are not — read the
+  comment before "fixing" one.

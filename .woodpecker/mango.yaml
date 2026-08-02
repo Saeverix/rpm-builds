@@ -1,0 +1,43 @@
+# Builds scenefx, then mango, which links against it.
+#
+# scenefx shares this workflow instead of getting its own because mango is the
+# only consumer: inside one workflow the handoff is just a `dnf install` of the
+# devel RPM we built a moment ago. Give it a workflow of its own the day a
+# second package needs it.
+
+when:
+  - event: [push, pull_request, manual]
+    path:
+      include:
+        - packages/mango/**
+        - packages/scenefx/**
+        - .woodpecker/mango.yaml
+
+steps:
+  - name: build
+    image: registry.fedoraproject.org/fedora:44
+    commands:
+      # dnf5-plugins provides `dnf builddep`, rpmdevtools provides `spectool`.
+      # Deliberately no git: mango's meson.build changes the version string it
+      # compiles in whenever git is on PATH, and %{_builddir} is not a checkout.
+      # Woodpecker clones in its own container, so nothing here needs it.
+      - dnf -y install rpm-build rpmdevtools dnf5-plugins
+      - mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
+
+      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/scenefx/scenefx.spec
+      - dnf -y builddep packages/scenefx/scenefx.spec
+      - rpmbuild --define "_topdir $PWD/_build" -ba packages/scenefx/scenefx.spec
+
+      # mango BuildRequires scenefx-devel. Install what we just built, minus the
+      # debug packages, which nothing needs and which drag in extra deps.
+      - dnf -y install $(ls _build/RPMS/x86_64/*.rpm | grep -v -- -debug)
+
+      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/mango/mango.spec
+      - dnf -y builddep packages/mango/mango.spec
+      - rpmbuild --define "_topdir $PWD/_build" -ba packages/mango/mango.spec
+
+      # output/ is the handoff point for the publish step still to be written
+      # (dnf repo on the K3s host, on tags only). Until that exists these RPMs
+      # die with the workspace volume -- Woodpecker has no artifact store.
+      - cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
+      - sha256sum output/*.rpm
