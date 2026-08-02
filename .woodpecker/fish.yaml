@@ -1,0 +1,66 @@
+when:
+  - event: [push, pull_request, manual]
+    path:
+      include:
+        - packages/fish/**
+        - .woodpecker/fish.yaml
+
+steps:
+  - name: build
+    image: registry.fedoraproject.org/fedora:44
+    commands:
+      # git-core is required here, unlike in mango.yaml where its absence is
+      # deliberate: `cargo vendor` below clones fish's four git dependencies.
+      # Do not "harmonise" the two workflows on this point.
+      - dnf -y install rpm-build rpmdevtools dnf5-plugins cargo git-core
+      - mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
+
+      # Fetches Source0/1/2, which have URLs. Source3 (the vendor tarball) has a
+      # bare filename, so spectool skips it and we build it in the next step.
+      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/fish/fish.spec
+
+      # Vendor the cargo dependencies so %build can run with CARGO_NET_OFFLINE.
+      # One block scalar, so it is unambiguously a single shell invocation.
+      - |
+        VER=$(rpmspec -q --qf '%{version}\n' --srpm packages/fish/fish.spec)
+        cd _build/SOURCES
+        rm -rf "fish-$VER" vendor-tmp
+        tar xf "fish-$VER.tar.xz"
+        SRC=$PWD/fish-$VER
+        mkdir -p vendor-tmp/.cargo
+        # Run cargo vendor from inside vendor-tmp with NO output path argument.
+        # cargo writes whatever path it was given into config.toml verbatim, and
+        # this tarball gets unpacked at the root of the source tree, where the
+        # directory is plain "vendor". Passing an explicit path here bakes in one
+        # that does not exist at build time, and cargo then fails with
+        # "failed to read root of directory source". build_tools/make_vendor_tarball.sh
+        # cds for the same reason.
+        cd vendor-tmp
+        # The cat preserves upstream's [alias] xtask stanza, which cargo's
+        # generated [source] replacement would otherwise clobber. Both are needed.
+        { cat "$SRC/.cargo/config.toml"
+          cargo vendor --manifest-path "$SRC/Cargo.toml"
+        } > .cargo/config.toml
+        tar -cJf "../fish-$VER-vendor.tar.xz" vendor .cargo
+        cd ..
+        rm -rf "fish-$VER" vendor-tmp
+
+      - dnf -y builddep packages/fish/fish.spec
+
+      # rpmbuild must NOT run as root here. fish's %check includes tests that
+      # assert on unreadable files and directories (init-unreadable-cwd,
+      # init-unreadable-config-paths, cd, path, fish_config, indent), and root
+      # bypasses those permissions, so they fail. As root: 197/203 pass. As an
+      # unprivileged user: 201/201. Fedora hits none of this because mock builds
+      # as the "mockbuild" user; this reproduces that. dnf above still needs
+      # root, so only rpmbuild is dropped.
+      - |
+        id builder >/dev/null 2>&1 || useradd -m builder
+        chown -R builder:builder _build
+        su builder -c "rpmbuild --define '_topdir $PWD/_build' -ba $PWD/packages/fish/fish.spec"
+
+      # output/ is the handoff point for the publish step still to be written
+      # (dnf repo on the K3s host, on tags only). Until that exists these RPMs
+      # die with the workspace volume -- Woodpecker has no artifact store.
+      - cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
+      - sha256sum output/*.rpm

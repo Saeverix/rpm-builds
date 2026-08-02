@@ -9,6 +9,7 @@ ships too old, built by Woodpecker CI. Targets **Fedora 44, x86_64**.
 | --- | --- | --- | --- |
 | `scenefx`, `scenefx-devel` | 0.5.0 (tag `0.5`) | `mango` | <https://github.com/wlrfx/scenefx> |
 | `mango` | 0.15.5 | `mango` | <https://github.com/mangowm/mango> |
+| `fish` | 4.8.1 | `fish` | <https://github.com/fish-shell/fish-shell> |
 
 `mango` is the MangoWM Wayland compositor. Its upstream build instructions tell
 you to build wlroots by hand, but that is not needed on Fedora 44 — the distro
@@ -18,6 +19,19 @@ into `/usr` would collide with the distro package.
 
 `scenefx` exists here only because `mango` links against it, so the two share one
 workflow.
+
+`fish` is here because Fedora 44 ships 4.6.0. It is a Rust build, and its release
+tarball contains no vendored crates, so the workflow runs `cargo vendor` and
+hands the result to the spec as `Source3`; `%build` then runs with
+`CARGO_NET_OFFLINE=true`. That keeps the SRPM self-contained — it can be rebuilt
+with no network at all — and sidesteps the five-patch stack Fedora needs to strip
+fish's four git dependencies. The release signature is verified against the
+upstream maintainer's key during `%prep`.
+
+fish's workflow also drops privileges before `rpmbuild`, because its test suite
+asserts on unreadable files and root bypasses those permissions: as root 197/203
+tests pass, as an unprivileged user 201/201. Fedora avoids this for free because
+mock builds as a non-root user.
 
 ## Layout
 
@@ -83,6 +97,10 @@ The plan is a dnf repo hosted on the K3s cluster, published **on tags only**.
 
 ## Conventions
 
+- `%changelog` entries are attributed to `Saeverix`, with no email address. RPM
+  treats everything after the date as free text, so the address Fedora's
+  guidelines use is optional. If you add entries with `rpmdev-bumpspec`, pass
+  `-u Saeverix` or it will reintroduce one.
 - Versions are pinned to upstream release tags. To update a package, bump
   `Version` (and `%global tag` where upstream's tag differs from its version, as
   with scenefx) and reset `Release` to `1%{?dist}`.

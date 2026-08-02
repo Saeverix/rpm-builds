@@ -69,5 +69,5 @@ blur and shadows on top. Configuration is a plain text file at
 %config(noreplace) %{_sysconfdir}/mango/config.conf
 
 %changelog
-* Sun Aug 02 2026 Werner <werner@snakeware.nl> - 0.15.5-1
+* Sun Aug 02 2026 Saeverix - 0.15.5-1
 - Initial package

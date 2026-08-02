@@ -78,5 +78,5 @@ Headers and pkgconfig file needed to build compositors against %{name}.
 %{_libdir}/pkgconfig/scenefx-%{apiver}.pc
 
 %changelog
-* Sun Aug 02 2026 Werner <werner@snakeware.nl> - 0.5.0-1
+* Sun Aug 02 2026 Saeverix - 0.5.0-1
 - Initial package, built for MangoWM
