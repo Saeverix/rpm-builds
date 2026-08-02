@@ -5,6 +5,10 @@
 # devel RPM we built a moment ago. Give it a workflow of its own the day a
 # second package needs it.
 
+# Tags are matched on their name rather than on changed paths. Path filters are
+# defined against a diff, and what a tag event diffs against is not something to
+# rely on; a tag name is unambiguous. Both prefixes are accepted because this
+# workflow owns both packages -- tagging either builds and publishes the pair.
 when:
   - event: [push, pull_request, manual]
     path:
@@ -12,6 +16,11 @@ when:
         - packages/mango/**
         - packages/scenefx/**
         - .woodpecker/mango.yaml
+  - event: tag
+    ref:
+      include:
+        - refs/tags/mango-*
+        - refs/tags/scenefx-*
 
 steps:
   - name: build
@@ -36,8 +45,76 @@ steps:
       - dnf -y builddep packages/mango/mango.spec
       - rpmbuild --define "_topdir $PWD/_build" -ba packages/mango/mango.spec
 
-      # output/ is the handoff point for the publish step still to be written
-      # (dnf repo on the K3s host, on tags only). Until that exists these RPMs
-      # die with the workspace volume -- Woodpecker has no artifact store.
+      # output/ is the handoff point for the publish step below. On anything but a
+      # tag the pipeline stops here and these RPMs die with the workspace volume
+      # -- Woodpecker has no artifact store.
       - cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
       - sha256sum output/*.rpm
+
+  # Signs the binary RPMs and pushes them into the dnf repo on the K3s cluster.
+  # Duplicated verbatim in fish.yaml rather than factored into a script, so each
+  # workflow stays readable end to end on its own.
+  #
+  # The GPG private key never leaves this step. Metadata is generated in the
+  # cluster, so repomd.xml cannot be signed at the moment it is written; instead
+  # createrepo_c is triggered over ssh, the finished repomd.xml is pulled back
+  # here, signed where the key already is, and only the detached signature goes
+  # up. The cluster therefore holds no signing material at all.
+  - name: publish
+    image: registry.fedoraproject.org/fedora:44
+    when:
+      - event: tag
+    environment:
+      REPO_HOST:
+        from_secret: rpm_repo_host
+      SSH_KEY:
+        from_secret: rpm_ssh_key
+      KNOWN_HOSTS:
+        from_secret: rpm_ssh_known_hosts
+      GPG_KEY:
+        from_secret: rpm_gpg_key
+    commands:
+      - dnf -y install rpm-sign gnupg2 openssh-clients rsync
+
+      # rpmsign shells out to gpg, so the key has to be in a keyring rather than
+      # just on disk. The key carries no passphrase, which is what lets gpg run
+      # with rpm's default --pinentry-mode cancel.
+      - printf '%s\n' "$GPG_KEY" | gpg --batch --import
+      # -F':' is quoted because a bare "-F: " is a colon-space, which YAML reads
+      # as a key separator and the file then fails to parse.
+      - FPR=$(gpg --list-secret-keys --with-colons | awk -F':' '/^fpr/{print $10; exit}')
+
+      # Binary RPMs only. debuginfo, debugsource and the SRPM are all rebuildable
+      # from the tagged spec, so they stay out of the repo.
+      - mkdir -p publish
+      - cp $(ls output/*.rpm | grep -vE -- '-debug(info|source)-|\.src\.rpm$') publish/
+      - rpmsign --define "_gpg_name $FPR" --addsign publish/*.rpm
+
+      # Verify against the key that just made the signatures. Do NOT test this by
+      # checking that a signature tag is populated: %{SIGPGP} is the legacy tag
+      # and reads (none) on rpm 4.20 even for a correctly signed package, so that
+      # check rejects every build. Importing the public key and letting rpm verify
+      # is the honest test, and -v records the key ID in the log.
+      - gpg --export --armor "$FPR" > /tmp/rpm-pubkey.asc
+      - rpm --import /tmp/rpm-pubkey.asc
+      - if ! rpm -Kv publish/*.rpm; then echo 'signature verification failed'; exit 1; fi
+
+      # Woodpecker runs these commands in one shell, so RSH and REPO carry across
+      # the lines below. Every path is absolute and there is no cd.
+      - install -d -m 700 $HOME/.ssh
+      - printf '%s\n' "$SSH_KEY" > $HOME/.ssh/id_ed25519
+      - chmod 600 $HOME/.ssh/id_ed25519
+      - printf '%s\n' "$KNOWN_HOSTS" > $HOME/.ssh/known_hosts
+      - RSH="ssh -p 2222 -i $HOME/.ssh/id_ed25519"
+      - REPO=/srv/repo/fedora/44/x86_64
+
+      - rsync -av -e "$RSH" publish/ rpm-publish@$REPO_HOST:$REPO/
+
+      # Keep the newest 3 of each package, then refresh the metadata in place.
+      # repomanage reads RPM headers, so this is version-aware rather than
+      # lexical -- mango-0.15.10 correctly outranks mango-0.15.9.
+      - $RSH rpm-publish@$REPO_HOST "dnf repomanage --old --keep 3 $REPO | xargs -r rm -f && createrepo_c --update $REPO"
+
+      - $RSH rpm-publish@$REPO_HOST "cat $REPO/repodata/repomd.xml" > repomd.xml
+      - gpg --batch --yes --detach-sign --armor -u "$FPR" -o repomd.xml.asc repomd.xml
+      - rsync -av -e "$RSH" repomd.xml.asc rpm-publish@$REPO_HOST:$REPO/repodata/

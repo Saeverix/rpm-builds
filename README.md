@@ -98,14 +98,56 @@ podman unshare rm -rf _build
 
 ## Publishing
 
-Not wired up yet. Woodpecker has no built-in artifact store — the maintainers
-closed that request as by-design
-([#1014](https://github.com/woodpecker-ci/woodpecker/issues/1014)) — so the
-workspace and everything in `output/` is destroyed when a pipeline ends. Today
-the pipeline is a build-verification gate only.
+Each workflow ends with a `publish` step that ships its RPMs to a dnf repo hosted
+on the K3s cluster. It runs **on tags only** — a plain push still builds and
+verifies, then throws the RPMs away, because Woodpecker has no artifact store
+([#1014](https://github.com/woodpecker-ci/woodpecker/issues/1014), closed as
+by-design).
 
-The plan is a dnf repo hosted on the K3s cluster, published **on tags only**.
-`output/` already contains everything such a step needs.
+Tag names decide what publishes, and the prefix must match the workflow:
+
+| Tag | Publishes |
+| --- | --- |
+| `fish-4.8.1-1` | `fish` |
+| `mango-0.15.5-1` | `mango` and `scenefx` |
+| `scenefx-0.5.0-1` | `mango` and `scenefx` |
+
+```sh
+git tag fish-4.8.1-1 && git push --tags
+```
+
+Tags are matched on `ref` rather than on changed paths, because a path filter is
+evaluated against a diff and what a tag diffs against is not worth relying on.
+
+Only binary RPMs are published. `-debuginfo`, `-debugsource` and the SRPM are
+filtered out — they are all rebuildable from the tagged spec. The repo keeps the
+newest three builds of each package, so a bad bump can be downgraded away; older
+ones are pruned by `dnf repomanage` before the metadata is regenerated.
+
+Everything is GPG-signed, and the private key never leaves the publish step.
+Because the metadata is generated in the cluster, `repomd.xml` cannot be signed
+at the moment it is written; instead `createrepo_c` runs over ssh, the finished
+`repomd.xml` comes back here, gets signed where the key already is, and only the
+detached signature goes up. Clients therefore get both `gpgcheck=1` and
+`repo_gpgcheck=1`.
+
+Do not verify the signing with a `%{SIGPGP}` tag check. That is the legacy
+signature tag and reads `(none)` on rpm 4.20 even for a correctly signed package,
+so it rejects every build; the step imports the public key and lets `rpm -Kv`
+verify instead.
+
+The cluster manifests are **not** in this repo — they live in the `homelab` repo
+under `apps/rpm-repo/`, which also serves the client `.repo` file and the public
+key. Installing on a Fedora box:
+
+```sh
+sudo curl -o /etc/yum.repos.d/saeverix.repo https://rpm.<dev-domain>/saeverix.repo
+sudo rpm --import https://rpm.<dev-domain>/RPM-GPG-KEY-saeverix
+sudo dnf install mango fish
+```
+
+Woodpecker secrets the publish step needs: `rpm_repo_host`, `rpm_ssh_key`,
+`rpm_ssh_known_hosts`, `rpm_gpg_key`.
 
 ## Conventions
 
