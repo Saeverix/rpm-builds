@@ -15,7 +15,7 @@ steps:
   - name: build
     image: registry.fedoraproject.org/fedora:44
     commands:
-      # git-core is required here, unlike in mango.yaml where its absence is
+      # git-core is required here, unlike in mangowm.yaml where its absence is
       # deliberate: `cargo vendor` below clones fish's four git dependencies.
       # Do not "harmonise" the two workflows on this point.
       - dnf -y install rpm-build rpmdevtools dnf5-plugins cargo git-core
@@ -65,7 +65,7 @@ steps:
       - sha256sum output/*.rpm
 
   # Signs the binary RPMs and pushes them into the dnf repo on the K3s cluster.
-  # Duplicated verbatim in mango.yaml rather than factored into a script, so each
+  # Duplicated verbatim in mangowm.yaml rather than factored into a script, so each
   # workflow stays readable end to end on its own.
   #
   # The GPG private key never leaves this step. Metadata is generated in the

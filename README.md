@@ -7,18 +7,25 @@ ships too old, built by Woodpecker CI. Targets **Fedora 44, x86_64**.
 
 | Package | Version | Workflow | Upstream |
 | --- | --- | --- | --- |
-| `scenefx`, `scenefx-devel` | 0.5.0 (tag `0.5`) | `mango` | <https://github.com/wlrfx/scenefx> |
-| `mango` | 0.15.5 | `mango` | <https://github.com/mangowm/mango> |
+| `scenefx`, `scenefx-devel` | 0.5.0 (tag `0.5`) | `mangowm` | <https://github.com/wlrfx/scenefx> |
+| `mangowm` | 0.15.6 | `mangowm` | <https://github.com/mangowm/mango> |
 | `fish` | 4.8.1 | `fish` | <https://github.com/fish-shell/fish-shell> |
 
-`mango` is the MangoWM Wayland compositor. Its upstream build instructions tell
-you to build wlroots by hand, but that is not needed on Fedora 44 — the distro
-already ships `wlroots-0.20.2` and a `wlroots-devel` providing `wlroots-0.20.pc`,
-which is exactly what both `scenefx` and `mango` ask for. Building a second copy
-into `/usr` would collide with the distro package.
+`mangowm` is the MangoWM Wayland compositor. The package is named `mangowm` to
+match what other repositories (Terra among them) call it, while upstream's GitHub
+repo is `mangowm/mango` — `mangowm` is the org, `mango` the repo. That split runs
+through the whole package: the tarball unpacks into `mango-<version>/`, so the
+spec needs `%autosetup -n mango-%{version}`, and the installed binary and config
+paths are all `mango`. Do not "harmonise" those to `mangowm`.
 
-`scenefx` exists here only because `mango` links against it, so the two share one
-workflow.
+Its upstream build instructions tell you to build wlroots by hand, but that is not
+needed on Fedora 44 — the distro already ships `wlroots-0.20.2` and a
+`wlroots-devel` providing `wlroots-0.20.pc`, which is exactly what both `scenefx`
+and `mangowm` ask for. Building a second copy into `/usr` would collide with the
+distro package.
+
+`scenefx` exists here only because `mangowm` links against it, so the two share
+one workflow.
 
 `fish` is here because Fedora 44 ships 4.6.0. It is a Rust build, and its release
 tarball contains no vendored crates, so the workflow runs `cargo vendor` and
@@ -29,9 +36,8 @@ fish's four git dependencies. The release signature is verified against the
 upstream maintainer's key during `%prep`.
 
 fish's workflow also drops privileges before `rpmbuild`, because its test suite
-asserts on unreadable files and root bypasses those permissions: as root 197/203
-tests pass, as an unprivileged user 201/201. Fedora avoids this for free because
-mock builds as a non-root user.
+asserts on unreadable files and root bypasses those permissions. Fedora avoids this
+for free because mock builds as a non-root user.
 
 ## Layout
 
@@ -41,9 +47,9 @@ packages/<name>/<name>.spec    one directory per source package
 ```
 
 Each file in `.woodpecker/` is an independent workflow. Woodpecker runs them in
-parallel on separate agents, and each one carries a `when: path:` filter so
-touching one package's spec does not rebuild the others. A package with a build
-dependency on another (mango on scenefx) just builds both in one workflow and
+parallel on separate agents, and each one matches only its own tag prefix, so
+tagging one package does not rebuild the others. A package with a build
+dependency on another (mangowm on scenefx) just builds both in one workflow and
 `dnf install`s the intermediate result.
 
 There is no build script and no ordering file — ordering is the order of the
@@ -53,15 +59,19 @@ commands in a workflow, and dependencies are whatever that workflow installs.
 
 1. `packages/<name>/<name>.spec`
 2. `.woodpecker/<name>.yaml` — copy an existing one and change the spec paths and
-   the `path:` filter.
+   the `ref:` tag prefix.
 
 ## Building locally
+
+CI only runs on tags, so this is where a spec gets verified before it is tagged —
+a build error found here costs nothing, whereas one found in CI costs a `Release`
+bump and a second tag.
 
 The CI definition is the build definition, so run it with the Woodpecker CLI
 rather than reimplementing it:
 
 ```sh
-woodpecker-cli exec .woodpecker/mango.yaml
+woodpecker-cli exec .woodpecker/mangowm.yaml
 ```
 
 > Not yet verified whether `woodpecker-cli exec` leaves `output/` in your working
@@ -98,9 +108,11 @@ podman unshare rm -rf _build
 
 ## Publishing
 
-Each workflow ends with a `publish` step that ships its RPMs to a dnf repo hosted
-on the K3s cluster. It runs **on tags only** — a plain push still builds and
-verifies, then throws the RPMs away, because Woodpecker has no artifact store
+**A tag is the only thing that runs CI at all.** Pushing a commit builds nothing,
+and there is no manual trigger — so a tag always ends in a publish, and the spec
+has to be checked locally before it is tagged (see [Building
+locally](#building-locally)). RPMs would not survive a non-publishing run anyway,
+because Woodpecker has no artifact store
 ([#1014](https://github.com/woodpecker-ci/woodpecker/issues/1014), closed as
 by-design).
 
@@ -109,8 +121,8 @@ Tag names decide what publishes, and the prefix must match the workflow:
 | Tag | Publishes |
 | --- | --- |
 | `fish-4.8.1-1` | `fish` |
-| `mango-0.15.5-1` | `mango` and `scenefx` |
-| `scenefx-0.5.0-1` | `mango` and `scenefx` |
+| `mangowm-0.15.6-1` | `mangowm` and `scenefx` |
+| `scenefx-0.5.0-1` | `mangowm` and `scenefx` |
 
 ```sh
 git tag fish-4.8.1-1 && git push --tags
@@ -119,23 +131,11 @@ git tag fish-4.8.1-1 && git push --tags
 Tags are matched on `ref` rather than on changed paths, because a path filter is
 evaluated against a diff and what a tag diffs against is not worth relying on.
 
-### Triggering by hand
-
-The Woodpecker server is only reachable on the LAN, so GitHub cannot deliver the
-webhook a tag push needs — until that changes, tags build nothing on their own.
-Trigger a manual pipeline instead and set a `PACKAGE` variable to pick the
-workflow:
-
-| `PACKAGE` | Runs |
-| --- | --- |
-| `mango` | `mango.yaml` — builds and publishes scenefx, scenefx-devel, mango |
-| `fish` | `fish.yaml` — builds and publishes fish |
-
-Omitting the variable matches neither workflow and the pipeline does nothing;
-that is deliberate, so a stray manual run does not rebuild every package. Manual
-runs publish, which tag-only runs would not — the `manual` entry in each publish
-step's `when:` is there purely to cover the missing webhook, and should be
-removed once tags work.
+If a tagged build fails, fix the spec and tag again with `Release` bumped — e.g.
+`mangowm-0.15.6-2`. Do not force-push the existing tag: whether Woodpecker treats
+a moved tag as a fresh `tag` event is unconfirmed, and a tag that moves no longer
+identifies what is in the repo. This also means the Woodpecker repo settings must
+keep **Tag** in *Allowed events*; that setting is not in version control.
 
 Only binary RPMs are published. `-debuginfo`, `-debugsource` and the SRPM are
 filtered out — they are all rebuildable from the tagged spec. The repo keeps the
@@ -161,7 +161,7 @@ key. Installing on a Fedora box:
 ```sh
 sudo curl -o /etc/yum.repos.d/saeverix.repo https://rpm.<dev-domain>/saeverix.repo
 sudo rpm --import https://rpm.<dev-domain>/RPM-GPG-KEY-saeverix
-sudo dnf install mango fish
+sudo dnf install mangowm fish
 ```
 
 Woodpecker secrets the publish step needs: `rpm_repo_host`, `rpm_ssh_key`,
