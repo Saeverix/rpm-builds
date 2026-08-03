@@ -1,41 +1,30 @@
-# Builds scenefx, then mango, which links against it.
+# Builds scenefx, then mangowm, which links against it.
 #
-# scenefx shares this workflow instead of getting its own because mango is the
+# scenefx shares this workflow instead of getting its own because mangowm is the
 # only consumer: inside one workflow the handoff is just a `dnf install` of the
 # devel RPM we built a moment ago. Give it a workflow of its own the day a
 # second package needs it.
 
+# A tag is the only thing that runs this workflow. Ordinary commits build
+# nothing, so a spec is checked with a local rpmbuild before it is tagged.
+#
 # Tags are matched on their name rather than on changed paths. Path filters are
 # defined against a diff, and what a tag event diffs against is not something to
 # rely on; a tag name is unambiguous. Both prefixes are accepted because this
 # workflow owns both packages -- tagging either builds and publishes the pair.
-#
-# The manual clause exists because Woodpecker is only reachable on the LAN, so
-# GitHub cannot deliver the webhook that a tag push would need. Triggering by
-# hand with PACKAGE=mango runs this workflow and not fish's; without that
-# variable neither workflow matches and the pipeline does nothing, which is
-# deliberate -- a bare manual run should not rebuild everything.
 when:
-  - event: [tag]
-    path:
-      include:
-        - packages/mango/**
-        - packages/scenefx/**
-        - .woodpecker/mango.yaml
   - event: tag
     ref:
       include:
-        - refs/tags/mango-*
+        - refs/tags/mangowm-*
         - refs/tags/scenefx-*
-  - event: manual
-    evaluate: 'PACKAGE == "mango"'
 
 steps:
   - name: build
     image: registry.fedoraproject.org/fedora:44
     commands:
       # dnf5-plugins provides `dnf builddep`, rpmdevtools provides `spectool`.
-      # Deliberately no git: mango's meson.build changes the version string it
+      # Deliberately no git: mangowm's meson.build changes the version string it
       # compiles in whenever git is on PATH, and %{_builddir} is not a checkout.
       # Woodpecker clones in its own container, so nothing here needs it.
       - dnf -y install rpm-build rpmdevtools dnf5-plugins
@@ -45,17 +34,16 @@ steps:
       - dnf -y builddep packages/scenefx/scenefx.spec
       - rpmbuild --define "_topdir $PWD/_build" -ba packages/scenefx/scenefx.spec
 
-      # mango BuildRequires scenefx-devel. Install what we just built, minus the
+      # mangowm BuildRequires scenefx-devel. Install what we just built, minus the
       # debug packages, which nothing needs and which drag in extra deps.
       - dnf -y install $(ls _build/RPMS/x86_64/*.rpm | grep -v -- -debug)
 
-      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/mango/mango.spec
-      - dnf -y builddep packages/mango/mango.spec
-      - rpmbuild --define "_topdir $PWD/_build" -ba packages/mango/mango.spec
+      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/mangowm/mangowm.spec
+      - dnf -y builddep packages/mangowm/mangowm.spec
+      - rpmbuild --define "_topdir $PWD/_build" -ba packages/mangowm/mangowm.spec
 
-      # output/ is the handoff point for the publish step below. On anything but a
-      # tag the pipeline stops here and these RPMs die with the workspace volume
-      # -- Woodpecker has no artifact store.
+      # output/ is the handoff point for the publish step below; Woodpecker has no
+      # artifact store, so these RPMs live only as long as the workspace volume.
       - cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
       - sha256sum output/*.rpm
 
@@ -70,10 +58,12 @@ steps:
   # up. The cluster therefore holds no signing material at all.
   - name: publish
     image: registry.fedoraproject.org/fedora:44
-    # Manual is here only because tag events cannot reach this server yet. Once
-    # Woodpecker receives GitHub webhooks, drop it and go back to tags only.
+    # Redundant against the workflow-level filter today, since only tags get here
+    # at all. Kept because this step signs packages and writes to the live repo:
+    # if another trigger is ever added above, publishing should not follow it by
+    # default.
     when:
-      - event: [tag, manual]
+      - event: tag
     environment:
       REPO_HOST:
         from_secret: rpm_repo_host
@@ -128,8 +118,8 @@ steps:
       # unaffected because it drives its own ssh.
       #
       # Prune first, then rebuild the metadata. repomanage reads RPM headers, so
-      # it is version-aware rather than lexical -- mango-0.15.10 correctly
-      # outranks mango-0.15.9. On a repo with no metadata yet it prints a curl
+      # it is version-aware rather than lexical -- mangowm-0.15.10 correctly
+      # outranks mangowm-0.15.9. On a repo with no metadata yet it prints a curl
       # error and lists nothing, which is harmless; there is nothing to prune on
       # a first publish.
       - $RSH -n rpm-publish@$REPO_HOST "dnf repomanage --old --keep 3 $REPO | xargs -r rm -f"

@@ -1,25 +1,15 @@
+# A tag is the only thing that runs this workflow. Ordinary commits build
+# nothing, so a spec is checked with a local rpmbuild before it is tagged.
+#
 # Tags are matched on their name rather than on changed paths. Path filters are
 # defined against a diff, and what a tag event diffs against is not something to
 # rely on; a tag name is unambiguous. So `fish-4.8.1-1` publishes fish and
 # touches nothing else.
-#
-# The manual clause exists because Woodpecker is only reachable on the LAN, so
-# GitHub cannot deliver the webhook that a tag push would need. Triggering by
-# hand with PACKAGE=fish runs this workflow and not mango's; without that
-# variable neither workflow matches and the pipeline does nothing, which is
-# deliberate -- a bare manual run should not rebuild everything.
 when:
-  - event: [tag]
-    path:
-      include:
-        - packages/fish/**
-        - .woodpecker/fish.yaml
   - event: tag
     ref:
       include:
         - refs/tags/fish-*
-  - event: manual
-    evaluate: 'PACKAGE == "fish"'
 
 steps:
   - name: build
@@ -69,9 +59,8 @@ steps:
       - chown -R builder:builder _build
       - su builder -c "rpmbuild --define '_topdir $PWD/_build' -ba $PWD/packages/fish/fish.spec"
 
-      # output/ is the handoff point for the publish step below. On anything but a
-      # tag the pipeline stops here and these RPMs die with the workspace volume
-      # -- Woodpecker has no artifact store.
+      # output/ is the handoff point for the publish step below; Woodpecker has no
+      # artifact store, so these RPMs live only as long as the workspace volume.
       - cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
       - sha256sum output/*.rpm
 
@@ -86,10 +75,12 @@ steps:
   # up. The cluster therefore holds no signing material at all.
   - name: publish
     image: registry.fedoraproject.org/fedora:44
-    # Manual is here only because tag events cannot reach this server yet. Once
-    # Woodpecker receives GitHub webhooks, drop it and go back to tags only.
+    # Redundant against the workflow-level filter today, since only tags get here
+    # at all. Kept because this step signs packages and writes to the live repo:
+    # if another trigger is ever added above, publishing should not follow it by
+    # default.
     when:
-      - event: [tag, manual]
+      - event: tag
     environment:
       REPO_HOST:
         from_secret: rpm_repo_host
