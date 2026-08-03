@@ -9,7 +9,7 @@
 # variable neither workflow matches and the pipeline does nothing, which is
 # deliberate -- a bare manual run should not rebuild everything.
 when:
-  - event: [push, pull_request]
+  - event: [tag]
     path:
       include:
         - packages/fish/**

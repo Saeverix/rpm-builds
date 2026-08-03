@@ -1,5 +1,5 @@
-Name:           mango
-Version:        0.15.5
+Name:           mangowm
+Version:        0.15.6
 Release:        1%{?dist}
 Summary:        Wayland compositor based on wlroots with dwm-like tiling and effects
 
@@ -46,7 +46,9 @@ blur and shadows on top. Configuration is a plain text file at
 /etc/mango/config.conf, and the mmsg tool talks to a running instance over IPC.
 
 %prep
-%autosetup
+# The package is named mangowm (matching Terra and other repos), but the GitHub
+# archive unpacks into the repo name, mango-%%{version}.
+%autosetup -n mango-%{version}
 
 %build
 %meson
@@ -69,5 +71,8 @@ blur and shadows on top. Configuration is a plain text file at
 %config(noreplace) %{_sysconfdir}/mango/config.conf
 
 %changelog
+* Mon Aug 03 2026 Saeverix - 0.15.6-1
+- Bumped to 0.15.6
+
 * Sun Aug 02 2026 Saeverix - 0.15.5-1
 - Initial package
