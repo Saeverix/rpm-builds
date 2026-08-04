@@ -1,46 +1,49 @@
-# Builds scenefx, then mangowm, which links against it.
-#
-# scenefx shares this workflow instead of getting its own because mangowm is the
-# only consumer: inside one workflow the handoff is just a `dnf install` of the
-# devel RPM we built a moment ago. Give it a workflow of its own the day a
-# second package needs it.
-
 # A tag is the only thing that runs this workflow. Ordinary commits build
 # nothing, so a spec is checked with a local rpmbuild before it is tagged.
 #
 # Tags are matched on their name rather than on changed paths. Path filters are
 # defined against a diff, and what a tag event diffs against is not something to
-# rely on; a tag name is unambiguous. Both prefixes are accepted because this
-# workflow owns both packages -- tagging either builds and publishes the pair.
+# rely on; a tag name is unambiguous. So `noctalia-5.0.0-beta.7-1` publishes
+# noctalia and touches nothing else.
+#
+# Note the hyphen: the spec's Version is 5.0.0~beta.7, but git rejects `~` in a
+# ref name (it is revision syntax), so tags spell it with a hyphen instead.
 when:
   - event: tag
     ref:
       include:
-        - refs/tags/mangowm-*
-        - refs/tags/scenefx-*
+        - refs/tags/noctalia-*
 
 steps:
   - name: build
     image: registry.fedoraproject.org/fedora:44
     commands:
-      # dnf5-plugins provides `dnf builddep`, rpmdevtools provides `spectool`.
-      # Deliberately no git: mangowm's meson.build changes the version string it
-      # compiles in whenever git is on PATH, and %{_builddir} is not a checkout.
-      # Woodpecker clones in its own container, so nothing here needs it.
-      - dnf -y install rpm-build rpmdevtools dnf5-plugins
+      # git-core is required here, unlike in mangowm.yaml where its absence is
+      # deliberate: the plugin_git_export test in %check init/add/commit/clones
+      # real repositories, and fails outright without git on PATH. Do not
+      # "harmonise" the two workflows on this point.
+      #
+      # Having git present does re-expose the hazard mangowm.yaml avoids by
+      # omitting it -- `git describe` walking up out of the build tree into this
+      # rpm-builds checkout -- so noctalia.spec pins GIT_CEILING_DIRECTORIES in
+      # %build and %check instead. Omitting git here would trade a wrong version
+      # string for a failing test; the ceiling costs neither.
+      - dnf -y install rpm-build rpmdevtools dnf5-plugins git-core
       - mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
 
-      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/scenefx/scenefx.spec
-      - dnf -y builddep packages/scenefx/scenefx.spec
-      - rpmbuild --define "_topdir $PWD/_build" -ba packages/scenefx/scenefx.spec
+      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/noctalia/noctalia.spec
+      - dnf -y builddep packages/noctalia/noctalia.spec
 
-      # mangowm BuildRequires scenefx-devel. Install what we just built, minus the
-      # debug packages, which nothing needs and which drag in extra deps.
-      - dnf -y install $(ls _build/RPMS/x86_64/*.rpm | grep -v -- -debug)
-
-      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/mangowm/mangowm.spec
-      - dnf -y builddep packages/mangowm/mangowm.spec
-      - rpmbuild --define "_topdir $PWD/_build" -ba packages/mangowm/mangowm.spec
+      # rpmbuild must NOT run as root, same as fish.yaml. Four of the tests
+      # %check runs assert on file permissions -- calendar_cache_permissions,
+      # clipboard_storage_permissions, plugin_source_locks and secret_store --
+      # and root bypasses those, so they fail. Fedora never sees this because
+      # mock builds as "mockbuild". dnf above still needs root, so only rpmbuild
+      # is dropped. Woodpecker runs every command in this step in ONE shell, so
+      # the path below is absolute; a stray cd would leak across lines.
+      - id builder >/dev/null 2>&1 || useradd -m builder
+      - chown -R builder:builder _build
+      - su builder -c "rpmbuild --define '_topdir $PWD/_build' -ba $PWD/packages/noctalia/noctalia.spec"
 
       # output/ is the handoff point for the publish step below; Woodpecker has no
       # artifact store, so these RPMs live only as long as the workspace volume.
@@ -50,8 +53,8 @@ steps:
   # Signs the binary RPMs and pushes them into the dnf repo on the K3s cluster.
   # Fedora-only, so REPO is hardcoded here. fish.yaml's copy parameterises it on a
   # distro matrix; keep the two in sync when touching the signing or metadata logic.
-  # Duplicated in fish.yaml and noctalia.yaml rather than factored into a script, so each
-  # workflow stays readable end to end on its own.
+  # Duplicated in fish.yaml and mangowm.yaml rather than factored into a
+  # script, so each workflow stays readable end to end on its own.
   #
   # The GPG private key never leaves this step. Metadata is generated in the
   # cluster, so repomd.xml cannot be signed at the moment it is written; instead
@@ -120,10 +123,10 @@ steps:
       # unaffected because it drives its own ssh.
       #
       # Prune first, then rebuild the metadata. repomanage reads RPM headers, so
-      # it is version-aware rather than lexical -- mangowm-0.15.10 correctly
-      # outranks mangowm-0.15.9. On a repo with no metadata yet it prints a curl
-      # error and lists nothing, which is harmless; there is nothing to prune on
-      # a first publish.
+      # it is version-aware rather than lexical -- noctalia-5.0.0 correctly
+      # outranks noctalia-5.0.0~beta.7. On a repo with no metadata yet it prints a
+      # curl error and lists nothing, which is harmless; there is nothing to prune
+      # on a first publish.
       - $RSH -n rpm-publish@$REPO_HOST "dnf repomanage --old --keep 3 $REPO | xargs -r rm -f"
       - $RSH -n rpm-publish@$REPO_HOST "createrepo_c --update $REPO"
 

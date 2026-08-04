@@ -5,6 +5,30 @@
 # defined against a diff, and what a tag event diffs against is not something to
 # rely on; a tag name is unambiguous. So `fish-4.8.1-1` publishes fish and
 # touches nothing else.
+#
+# One tag now fans out to two distros. Woodpecker runs an axis per matrix entry on
+# separate agents, so `fish-4.8.1-1` produces fish-4.8.1-1.fc44 AND
+# fish-4.8.1-1.el10 and publishes each into its own repo tree. An RPM cannot be
+# shared between them: EL10 is glibc 2.39 against Fedora 44's 2.43, the sonames
+# differ, and %{?dist} differs. One spec still covers both -- fish needs no
+# conditionals.
+#
+# The axes publish independently, which is the tradeoff to know about: if EL10
+# fails after Fedora has already pushed, the release is half-published. Recover by
+# fixing the cause and tagging again with Release bumped, exactly as for a
+# single-distro failure.
+matrix:
+  include:
+    - DISTRO: fedora
+      RELEASEVER: "44"
+      IMAGE: registry.fedoraproject.org/fedora:44
+    # quay.io/almalinux/almalinux:10 does NOT resolve -- the org path is
+    # almalinuxorg. Getting this wrong fails at image pull with a confusing
+    # manifest error.
+    - DISTRO: almalinux
+      RELEASEVER: "10"
+      IMAGE: quay.io/almalinuxorg/almalinux:10
+
 when:
   - event: tag
     ref:
@@ -13,12 +37,22 @@ when:
 
 steps:
   - name: build
-    image: registry.fedoraproject.org/fedora:44
+    image: ${IMAGE}
     commands:
       # git-core is required here, unlike in mangowm.yaml where its absence is
       # deliberate: `cargo vendor` below clones fish's four git dependencies.
       # Do not "harmonise" the two workflows on this point.
-      - dnf -y install rpm-build rpmdevtools dnf5-plugins cargo git-core
+      - dnf -y install rpm-build rpmdevtools cargo git-core
+
+      # The builddep plugin is packaged differently per distro, so it is installed
+      # per axis rather than through one clever portable name. Fedora 44 is dnf5
+      # and wants dnf5-plugins; EL10 is still dnf4 (4.20.0), where dnf5-plugins
+      # does not exist at all.
+      - if [ "$DISTRO" = fedora ]; then dnf -y install dnf5-plugins; fi
+      # CRB is not optional -- several of fish's build dependencies live there and
+      # builddep cannot resolve without it. EPEL supplies the rest. AlmaLinux has
+      # no `devel` repo; that is CentOS Stream, so do not reach for it here.
+      - if [ "$DISTRO" = almalinux ]; then dnf -y install epel-release dnf-plugins-core && dnf config-manager --set-enabled crb; fi
       - mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
 
       # Fetches Source0/1/2, which have URLs. Source3 (the vendor tarball) has a
@@ -65,8 +99,15 @@ steps:
       - sha256sum output/*.rpm
 
   # Signs the binary RPMs and pushes them into the dnf repo on the K3s cluster.
-  # Duplicated verbatim in mangowm.yaml rather than factored into a script, so each
-  # workflow stays readable end to end on its own.
+  # Duplicated in mangowm.yaml and noctalia.yaml rather than factored into a script,
+  # so each workflow stays readable end to end on its own.
+  #
+  # This copy is no longer byte-identical to those two, because it is the only
+  # multi-distro workflow: `image` and `REPO` are parameterised on the matrix axis,
+  # and it creates the repo directory before the first rsync. Everything else is
+  # unchanged, and any fix to the signing or metadata logic still belongs in all
+  # three. If a second package ever targets more than one distro, that is the point
+  # to harmonise the three steps again rather than let a third variant appear.
   #
   # The GPG private key never leaves this step. Metadata is generated in the
   # cluster, so repomd.xml cannot be signed at the moment it is written; instead
@@ -74,7 +115,7 @@ steps:
   # here, signed where the key already is, and only the detached signature goes
   # up. The cluster therefore holds no signing material at all.
   - name: publish
-    image: registry.fedoraproject.org/fedora:44
+    image: ${IMAGE}
     # Redundant against the workflow-level filter today, since only tags get here
     # at all. Kept because this step signs packages and writes to the live repo:
     # if another trigger is ever added above, publishing should not follow it by
@@ -123,7 +164,13 @@ steps:
       - chmod 600 $HOME/.ssh/id_ed25519
       - printf '%s\n' "$KNOWN_HOSTS" > $HOME/.ssh/known_hosts
       - RSH="ssh -p 2222 -i $HOME/.ssh/id_ed25519"
-      - REPO=/srv/repo/fedora/44/x86_64
+      # One tree per distro, so the two axes never write to the same metadata.
+      - REPO=/srv/repo/$DISTRO/$RELEASEVER/x86_64
+
+      # rsync does not create intermediate directories, so a brand-new distro tree
+      # has to exist before the first push or the transfer fails. -n for the same
+      # reason as every other direct ssh below.
+      - $RSH -n rpm-publish@$REPO_HOST "mkdir -p $REPO"
 
       - rsync -av -e "$RSH" publish/ rpm-publish@$REPO_HOST:$REPO/
 

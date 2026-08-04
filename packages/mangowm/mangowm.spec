@@ -34,7 +34,7 @@ BuildRequires:  pkgconfig(xcb-icccm)
 # fails and an empty hash gets baked into the -DVERSION= string. With git
 # absent, meson.build takes its clean fallback branch and VERSION becomes
 # "%%{version}(unknown)". The same applies to the CI image -- see
-# .woodpecker/build.yaml.
+# .woodpecker/mangowm.yaml.
 
 # Built with -DXWAYLAND, so the X server is needed at runtime.
 Requires:       xorg-x11-server-Xwayland
