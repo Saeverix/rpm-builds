@@ -1,0 +1,134 @@
+# A tag is the only thing that runs this workflow. Ordinary commits build
+# nothing, so a spec is checked with a local rpmbuild before it is tagged.
+#
+# Tags are matched on their name rather than on changed paths. Path filters are
+# defined against a diff, and what a tag event diffs against is not something to
+# rely on; a tag name is unambiguous. So `noctalia-5.0.0~beta.7-1` publishes
+# noctalia and touches nothing else.
+when:
+  - event: tag
+    ref:
+      include:
+        - refs/tags/noctalia-*
+
+steps:
+  - name: build
+    image: registry.fedoraproject.org/fedora:44
+    commands:
+      # git-core is required here, unlike in mangowm.yaml where its absence is
+      # deliberate: the plugin_git_export test in %check init/add/commit/clones
+      # real repositories, and fails outright without git on PATH. Do not
+      # "harmonise" the two workflows on this point.
+      #
+      # Having git present does re-expose the hazard mangowm.yaml avoids by
+      # omitting it -- `git describe` walking up out of the build tree into this
+      # rpm-builds checkout -- so noctalia.spec pins GIT_CEILING_DIRECTORIES in
+      # %build and %check instead. Omitting git here would trade a wrong version
+      # string for a failing test; the ceiling costs neither.
+      - dnf -y install rpm-build rpmdevtools dnf5-plugins git-core
+      - mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
+
+      - spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/noctalia/noctalia.spec
+      - dnf -y builddep packages/noctalia/noctalia.spec
+
+      # rpmbuild must NOT run as root, same as fish.yaml. Four of the tests
+      # %check runs assert on file permissions -- calendar_cache_permissions,
+      # clipboard_storage_permissions, plugin_source_locks and secret_store --
+      # and root bypasses those, so they fail. Fedora never sees this because
+      # mock builds as "mockbuild". dnf above still needs root, so only rpmbuild
+      # is dropped. Woodpecker runs every command in this step in ONE shell, so
+      # the path below is absolute; a stray cd would leak across lines.
+      - id builder >/dev/null 2>&1 || useradd -m builder
+      - chown -R builder:builder _build
+      - su builder -c "rpmbuild --define '_topdir $PWD/_build' -ba $PWD/packages/noctalia/noctalia.spec"
+
+      # output/ is the handoff point for the publish step below; Woodpecker has no
+      # artifact store, so these RPMs live only as long as the workspace volume.
+      - cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
+      - sha256sum output/*.rpm
+
+  # Signs the binary RPMs and pushes them into the dnf repo on the K3s cluster.
+  # Duplicated verbatim in fish.yaml and mangowm.yaml rather than factored into a
+  # script, so each workflow stays readable end to end on its own.
+  #
+  # The GPG private key never leaves this step. Metadata is generated in the
+  # cluster, so repomd.xml cannot be signed at the moment it is written; instead
+  # createrepo_c is triggered over ssh, the finished repomd.xml is pulled back
+  # here, signed where the key already is, and only the detached signature goes
+  # up. The cluster therefore holds no signing material at all.
+  - name: publish
+    image: registry.fedoraproject.org/fedora:44
+    # Redundant against the workflow-level filter today, since only tags get here
+    # at all. Kept because this step signs packages and writes to the live repo:
+    # if another trigger is ever added above, publishing should not follow it by
+    # default.
+    when:
+      - event: tag
+    environment:
+      REPO_HOST:
+        from_secret: rpm_repo_host
+      SSH_KEY:
+        from_secret: rpm_ssh_key
+      KNOWN_HOSTS:
+        from_secret: rpm_ssh_known_hosts
+      GPG_KEY:
+        from_secret: rpm_gpg_key
+    commands:
+      - dnf -y install rpm-sign gnupg2 openssh-clients rsync
+
+      # rpmsign shells out to gpg, so the key has to be in a keyring rather than
+      # just on disk. The key carries no passphrase, which is what lets gpg run
+      # with rpm's default --pinentry-mode cancel.
+      - printf '%s\n' "$GPG_KEY" | gpg --batch --import
+      # -F':' is quoted because a bare "-F: " is a colon-space, which YAML reads
+      # as a key separator and the file then fails to parse.
+      - FPR=$(gpg --list-secret-keys --with-colons | awk -F':' '/^fpr/{print $10; exit}')
+
+      # Binary RPMs only. debuginfo, debugsource and the SRPM are all rebuildable
+      # from the tagged spec, so they stay out of the repo.
+      - mkdir -p publish
+      - cp $(ls output/*.rpm | grep -vE -- '-debug(info|source)-|\.src\.rpm$') publish/
+      - rpmsign --define "_gpg_name $FPR" --addsign publish/*.rpm
+
+      # Verify against the key that just made the signatures. Do NOT test this by
+      # checking that a signature tag is populated: %{SIGPGP} is the legacy tag
+      # and reads (none) on rpm 4.20 even for a correctly signed package, so that
+      # check rejects every build. Importing the public key and letting rpm verify
+      # is the honest test, and -v records the key ID in the log.
+      - gpg --export --armor "$FPR" > /tmp/rpm-pubkey.asc
+      - rpm --import /tmp/rpm-pubkey.asc
+      - if ! rpm -Kv publish/*.rpm; then echo 'signature verification failed'; exit 1; fi
+
+      # Woodpecker runs these commands in one shell, so RSH and REPO carry across
+      # the lines below. Every path is absolute and there is no cd.
+      - install -d -m 700 $HOME/.ssh
+      - printf '%s\n' "$SSH_KEY" > $HOME/.ssh/id_ed25519
+      - chmod 600 $HOME/.ssh/id_ed25519
+      - printf '%s\n' "$KNOWN_HOSTS" > $HOME/.ssh/known_hosts
+      - RSH="ssh -p 2222 -i $HOME/.ssh/id_ed25519"
+      - REPO=/srv/repo/fedora/44/x86_64
+
+      - rsync -av -e "$RSH" publish/ rpm-publish@$REPO_HOST:$REPO/
+
+      # Every direct ssh below MUST pass -n. Woodpecker feeds this script to the
+      # shell on stdin, and ssh without -n reads stdin as well -- it swallows the
+      # remaining lines as input for the remote command, so the step stops early
+      # and still reports success. That is exactly how the signing below got
+      # silently skipped once, leaving clients with no repomd.xml.asc. rsync is
+      # unaffected because it drives its own ssh.
+      #
+      # Prune first, then rebuild the metadata. repomanage reads RPM headers, so
+      # it is version-aware rather than lexical -- noctalia-5.0.0 correctly
+      # outranks noctalia-5.0.0~beta.7. On a repo with no metadata yet it prints a
+      # curl error and lists nothing, which is harmless; there is nothing to prune
+      # on a first publish.
+      - $RSH -n rpm-publish@$REPO_HOST "dnf repomanage --old --keep 3 $REPO | xargs -r rm -f"
+      - $RSH -n rpm-publish@$REPO_HOST "createrepo_c --update $REPO"
+
+      - $RSH -n rpm-publish@$REPO_HOST "cat $REPO/repodata/repomd.xml" > repomd.xml
+      - gpg --batch --yes --detach-sign --armor -u "$FPR" -o repomd.xml.asc repomd.xml
+      - rsync -av -e "$RSH" repomd.xml.asc rpm-publish@$REPO_HOST:$REPO/repodata/
+
+      # repo_gpgcheck=1 clients cannot load the repo at all without this file, and
+      # a step that ends early looks green -- so assert it landed.
+      - if ! $RSH -n rpm-publish@$REPO_HOST "test -s $REPO/repodata/repomd.xml.asc"; then echo 'repomd.xml.asc missing on the server'; exit 1; fi

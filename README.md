@@ -10,6 +10,7 @@ ships too old, built by Woodpecker CI. Targets **Fedora 44, x86_64**.
 | `scenefx`, `scenefx-devel` | 0.5.0 (tag `0.5`) | `mangowm` | <https://github.com/wlrfx/scenefx> |
 | `mangowm` | 0.15.6 | `mangowm` | <https://github.com/mangowm/mango> |
 | `fish` | 4.8.1 | `fish` | <https://github.com/fish-shell/fish-shell> |
+| `noctalia` | 5.0.0~beta.7 | `noctalia` | <https://github.com/noctalia-dev/noctalia> |
 
 `mangowm` is the MangoWM Wayland compositor. The package is named `mangowm` to
 match what other repositories (Terra among them) call it, while upstream's GitHub
@@ -35,9 +36,42 @@ with no network at all — and sidesteps the five-patch stack Fedora needs to st
 fish's four git dependencies. The release signature is verified against the
 upstream maintainer's key during `%prep`.
 
-fish's workflow also drops privileges before `rpmbuild`, because its test suite
-asserts on unreadable files and root bypasses those permissions. Fedora avoids this
-for free because mock builds as a non-root user.
+`noctalia` is a Wayland desktop shell — bars, dock, launcher, notifications, lock
+screen, wallpaper and settings in one binary — and Fedora does not ship it. Note
+that v5 is a C++23/Meson rewrite with **no Qt and no GTK**, drawing on Wayland and
+OpenGL ES directly. v4 was the Quickshell/QML configuration packaged elsewhere as
+`noctalia-shell`, which is what Repology may still show; none of that applies here,
+and nothing needs a `quickshell` package.
+
+Upstream is still in beta and tags releases `v5.0.0-beta.N`, which RPM cannot use
+verbatim because a hyphen separates Version from Release. The spec uses
+`5.0.0~beta.7` instead: a tilde sorts below everything, so the 5.0.0 final will
+upgrade cleanly with no epoch. The hyphenated form stays in `%global
+upstream_version` for the tag URL and the unpack directory, so a beta bump edits
+two lines rather than one.
+
+Upstream's README has a copy-paste `dnf install` line for Fedora that does not
+work on Fedora 44: it names `libEGL-devel` and `mesa-libGLES-devel`, neither of
+which is a Fedora 44 package. Asking for `pkgconfig(egl)` and `pkgconfig(glesv2)`
+resolves to `libglvnd-devel`, which is why the spec uses the pkg-config names.
+
+noctalia's workflow is also the one place where `git` has to be installed *and*
+fenced off at the same time. Its test suite drives real repositories, so git must
+be on `PATH`, but that makes meson's `vcs_tag()` run `git describe` — which walks
+up out of the build tree, finds *this* repository, and reports its tag
+(`fish-4.8.1-1-dirty`) as noctalia's revision. The spec sets
+`GIT_CEILING_DIRECTORIES=%{_builddir}` in `%build` and `%check` to stop that walk,
+after which `describe` fails and `vcs_tag` uses its own `unknown` fallback. This is
+the same hazard mangowm dodges by leaving git out entirely; noctalia cannot, so it
+fences instead. `GIT_DIR` is not a substitute — it suppresses discovery everywhere
+and breaks the tests' own repositories.
+
+fish's and noctalia's workflows drop privileges before `rpmbuild`, because their
+test suites assert on file permissions and root bypasses those. For fish it is
+tests over unreadable files; for noctalia it is
+`calendar_cache_permissions`, `clipboard_storage_permissions`,
+`plugin_source_locks` and `secret_store`. Fedora avoids this for free because mock
+builds as a non-root user.
 
 ## Layout
 
@@ -98,9 +132,20 @@ step's commands into one shell, so state leaks between them; a transcription tha
 drifted from the YAML by a single `cd` is exactly how a working-directory bug
 once reached CI while passing locally. Running the YAML is the only faithful test.
 
-Cleaning up afterwards: fish's workflow builds as an unprivileged user, and under
-rootless podman that leaves `_build` owned by a subuid your account cannot delete.
-`rm -rf _build` fails with "Permission denied"; use this instead:
+**Do not start a second `:Z` container against this directory while a build is
+running.** `:Z` relabels the bind mount with the *calling* container's SELinux MCS
+category, so a second container silently steals the label out from under the first
+one and every file the running build touches from then on fails. It does not look
+like a permission problem either: the symptoms are hundreds of
+`as: BFD ... assertion fail`, a bogus `No space left on device` on a disk with
+600 GB free, and `Permission denied` in a directory that has already accepted
+hundreds of object files. If you want to inspect or validate something mid-build,
+either wait, or mount read-only (`:z,ro`) — a shared label does not get stolen.
+
+Cleaning up afterwards: fish's and noctalia's workflows build as an unprivileged
+user, and under rootless podman that leaves `_build` owned by a subuid your
+account cannot delete. `rm -rf _build` fails with "Permission denied"; use this
+instead:
 
 ```sh
 podman unshare rm -rf _build
@@ -123,6 +168,7 @@ Tag names decide what publishes, and the prefix must match the workflow:
 | `fish-4.8.1-1` | `fish` |
 | `mangowm-0.15.6-1` | `mangowm` and `scenefx` |
 | `scenefx-0.5.0-1` | `mangowm` and `scenefx` |
+| `noctalia-5.0.0~beta.7-1` | `noctalia` |
 
 ```sh
 git tag fish-4.8.1-1 && git push --tags
