@@ -5,7 +5,7 @@
 
 Name:           fish
 Version:        4.8.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Friendly interactive shell
 
 # This is upstream's own declaration for the fish source tree. The vendored Rust
