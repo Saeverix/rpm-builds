@@ -3,10 +3,10 @@
 # sorts BELOW everything, so the eventual 5.0.0 final upgrades cleanly with no
 # epoch. %%{upstream_version} keeps the hyphenated form for the tag URL and the
 # unpack directory. Bumping a beta means editing both lines.
-%global upstream_version 5.0.0-beta.7
+%global upstream_version 5.0.0-beta.8
 
 Name:           noctalia
-Version:        5.0.0~beta.7
+Version:        5.0.0~beta.8
 Release:        1%{?dist}
 # Verbatim from upstream's PACKAGING.md, which asks packagers not to substitute a
 # shorter blurb ("lightweight Wayland bar", "status bar"). Noctalia is a full
@@ -107,6 +107,33 @@ against Wayland and OpenGL ES directly, with no Qt or GTK involved.
 Start it from a compositor autostart entry or the shipped desktop file, both of
 which run "noctalia --daemon", and control a running instance with
 "noctalia msg ...".
+
+# rpm sizes the compile job count as MemTotal / %%{_smp_tasksize_proc}, capped at
+# nproc, and the default assumes 512 MiB per compiler process. This tree needs
+# roughly three times that: measured peak cc1plus RSS is 1.37 GiB (worst offender
+# src/app/application.cpp -- a 10 KiB file whose headers expand to 1.46M lines of
+# assembly), and a -j16 compile peaks at 11.1 GiB resident across the tree. So on
+# any builder with less than nproc * 1.4 GiB the OOM killer takes cc1plus, and
+# because %%optflags carry -pipe the corpse reaches the assembler as a truncated
+# stream -- it reports "unknown pseudo-op", "end of file not at end of a line" and
+# "open CFI at the end of file" rather than anything mentioning memory. Do not
+# chase those; they are the symptom.
+#
+# Raising the assumed task size is the whole fix, and it scales with the builder
+# rather than hardcoding a -j number: 15 jobs on a 32 GiB machine, 4 on 8 GiB, 2
+# on 4 GiB. It applies to %%check too, which rebuilds before running the tests.
+# LTO is NOT implicated, which is worth recording because it is the obvious
+# suspect: dropping -ffat-lto-objects moves peak RSS only from 1.22 to 1.09 GiB
+# on the worst file, so %%_lto_cflags is left alone. The LTO link step's own peak
+# was never measured -- if a future build dies at [867/867] instead of mid-compile
+# that is a different ceiling, and this macro will not move it.
+#
+# CAVEAT for CI: this reads /proc/meminfo, which inside a container reports the
+# HOST's memory and not the cgroup limit. If the Woodpecker pod is capped below
+# what the node advertises, rpm cannot see it and this macro will still overshoot.
+# The ceiling then has to be stated outright, as an explicit
+# --define '_smp_build_ncpus N' on the rpmbuild line in .woodpecker/noctalia.yaml.
+%global _smp_tasksize_proc 2048
 
 %prep
 %autosetup -n %{name}-%{upstream_version}
