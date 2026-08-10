@@ -1,13 +1,14 @@
 Name:           mangowm
 Version:        0.15.6
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Wayland compositor based on wlroots with dwm-like tiling and effects
 
 # mango itself is GPL-3.0-or-later; it carries MIT-licensed code inherited from
 # dwl, tinywl, dwm and sway.
 License:        GPL-3.0-or-later AND MIT
 URL:            https://github.com/mangowm/mango
-Source0:        %{url}/archive/refs/tags/%{version}/%{name}-%{version}.tar.gz
+# Source0:      %%{url}/archive/refs/tags/%%{version}/%%{name}-%%{version}.tar.gz
+Source0:        %{url}/archive/8169bfc64746bf76aa92dc692775655d566fbff6.tar.gz
 
 BuildRequires:  gcc
 BuildRequires:  meson
@@ -48,7 +49,7 @@ blur and shadows on top. Configuration is a plain text file at
 %prep
 # The package is named mangowm (matching Terra and other repos), but the GitHub
 # archive unpacks into the repo name, mango-%%{version}.
-%autosetup -n mango-%{version}
+%autosetup -n mango-8169bfc64746bf76aa92dc692775655d566fbff6
 
 %build
 %meson
