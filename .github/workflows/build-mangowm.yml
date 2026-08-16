@@ -1,9 +1,9 @@
 # Builds scenefx, then mangowm, which links against it.
 #
-# Translated from .woodpecker/mangowm.yaml, which is still the live pipeline. Until
-# cutover, BOTH run on a `mangowm-*` or `scenefx-*` tag: Woodpecker builds and
-# publishes to the K3s repo, this one currently stops before rpmbuild. See the
-# RPM_BUILD_ENABLED note below.
+# Translated from .woodpecker/mangowm.yaml. This is the first workflow switched on
+# for real, so until cutover BOTH build and both publish on a `mangowm-*` or
+# `scenefx-*` tag: Woodpecker signs and rsyncs to the K3s repo, this one signs and
+# attaches the RPMs to a GitHub Release. Same key, same NVR, two destinations.
 #
 # scenefx shares this workflow instead of getting its own because mangowm is the
 # only consumer: inside one workflow the handoff is just a `dnf install` of the
@@ -46,16 +46,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # STAGE 1: prepare the build environment, prove the specs parse, then stop.
-  # Everything from `rpmbuild` onwards is written out below but skipped. Flip this
-  # to 'true' to turn on the real build, signing and release upload.
-  RPM_BUILD_ENABLED: 'false'
+  # Enabled: this workflow builds, signs and publishes for real. It is the first
+  # one turned on, being the smallest -- two packages, no matrix, root rpmbuild.
+  # The other three still stop after the dry run.
+  #
+  # The sign step needs the RPM_GPG_KEY repository secret; without it the step
+  # fails rather than silently shipping unsigned RPMs.
+  RPM_BUILD_ENABLED: 'true'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Stage 1 needs a couple of minutes. Raise when RPM_BUILD_ENABLED goes true.
-    timeout-minutes: 30
+    # scenefx then mangowm, both meson. Generous for a first real run.
+    timeout-minutes: 60
     container:
       image: registry.fedoraproject.org/fedora:44
     steps:
@@ -144,6 +147,12 @@ jobs:
           # with rpm's default --pinentry-mode cancel.
           printf '%s\n' "$GPG_KEY" | gpg --batch --import
           FPR=$(gpg --list-secret-keys --with-colons | awk -F':' '/^fpr/{print $10; exit}')
+
+          # Not in the Woodpecker original. An empty FPR here means the secret held
+          # a public key, or no key at all -- rpmsign would fail either way, but
+          # with an error that says nothing about the cause. Drop this line if you
+          # want the two copies byte-identical.
+          [ -n "$FPR" ] || { echo 'RPM_GPG_KEY imported no secret key' >&2; exit 1; }
 
           # Binary RPMs only. debuginfo, debugsource and the SRPM are all
           # rebuildable from the tagged spec, so they stay out of the repo.
