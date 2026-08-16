@@ -67,7 +67,7 @@ jobs:
       # That is a real improvement over Woodpecker, which clones: the hazard the
       # `dnf install` below avoids by omitting git cannot arise here at all. The
       # omission stays anyway -- it is the thing being relied on, not this.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: prepare build environment
         run: |
@@ -173,7 +173,7 @@ jobs:
       # download off a PR to check a build by hand.
       - name: upload build output
         if: env.RPM_BUILD_ENABLED == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpms-fedora-44
           path: output/*.rpm
@@ -182,7 +182,7 @@ jobs:
       # Signed, filtered, and consumed by the release job below.
       - name: upload publishable rpms
         if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: publish-fedora-44
           path: publish/*.rpm
@@ -206,7 +206,7 @@ jobs:
     steps:
       - name: download publishable rpms
         if: env.RPM_BUILD_ENABLED == 'true'
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: publish-*
           merge-multiple: true

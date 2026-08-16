@@ -45,7 +45,7 @@ jobs:
       # noctalia.spec's GIT_CEILING_DIRECTORIES pin therefore guards against a
       # condition that can no longer arise here -- keep it anyway, it is what makes
       # a local build in a real checkout safe too.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: prepare build environment
         run: |
@@ -144,7 +144,7 @@ jobs:
 
       - name: upload build output
         if: env.RPM_BUILD_ENABLED == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpms-fedora-44
           path: output/*.rpm
@@ -152,7 +152,7 @@ jobs:
 
       - name: upload publishable rpms
         if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: publish-fedora-44
           path: publish/*.rpm
@@ -175,7 +175,7 @@ jobs:
     steps:
       - name: download publishable rpms
         if: env.RPM_BUILD_ENABLED == 'true'
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: publish-*
           merge-multiple: true
