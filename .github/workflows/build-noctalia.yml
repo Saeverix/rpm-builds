@@ -1,0 +1,191 @@
+# Translated from .woodpecker/noctalia.yaml, which is still the live pipeline.
+# Until cutover, BOTH run on a `noctalia-*` tag: Woodpecker builds and publishes to
+# the K3s repo, this one currently stops before rpmbuild. See RPM_BUILD_ENABLED.
+name: build noctalia
+
+on:
+  push:
+    tags:
+      # Note the hyphen: the spec's Version is 5.0.0~beta.8, but git rejects `~` in
+      # a ref name (it is revision syntax), so tags spell it with a hyphen instead.
+      - 'noctalia-*'
+      # Stage-1 only. Woodpecker matches refs/tags/noctalia-* and its publish step
+      # is NOT disabled, so a test tag using the real prefix would sign a build and
+      # rsync it into the live K3s repo. `citest-` matches nothing in Woodpecker's
+      # ref.include. Remove once .woodpecker/ is gone.
+      - 'citest-noctalia-*'
+  pull_request:
+    paths:
+      - 'packages/noctalia/**'
+      - '.github/workflows/build-noctalia.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # STAGE 1: prepare the build environment, prove the spec parses, then stop.
+  # Everything from `rpmbuild` onwards is written out below but skipped. Flip this
+  # to 'true' to turn on the real build, signing and release upload.
+  RPM_BUILD_ENABLED: 'false'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: registry.fedoraproject.org/fedora:44
+    steps:
+      # The Fedora image ships no git binary, so checkout falls back to fetching a
+      # tarball through the REST API and leaves NO .git directory in the workspace.
+      # noctalia.spec's GIT_CEILING_DIRECTORIES pin therefore guards against a
+      # condition that can no longer arise here -- keep it anyway, it is what makes
+      # a local build in a real checkout safe too.
+      - uses: actions/checkout@v5
+
+      - name: prepare build environment
+        run: |
+          set -eux
+          # git-core is required here, unlike in build-mangowm.yml where its absence
+          # is deliberate: the plugin_git_export test in %check init/add/commit/
+          # clones real repositories, and fails outright without git on PATH. Do not
+          # "harmonise" the two workflows on this point.
+          dnf -y install rpm-build rpmdevtools dnf5-plugins git-core
+          mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
+
+          # rpmbuild must NOT run as root. Four of the tests %check runs assert on
+          # file permissions -- calendar_cache_permissions,
+          # clipboard_storage_permissions, plugin_source_locks and secret_store --
+          # and root bypasses those, so they fail. Fedora never sees this because
+          # mock builds as "mockbuild". dnf still needs root, so only rpmbuild is
+          # dropped.
+          id builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder _build
+
+          # Prove `builder` can actually reach the workspace before stage 2 depends
+          # on it. The runner's /__w path is not something this repo controls, and a
+          # traversal failure here would otherwise surface as a confusing rpmbuild
+          # error much later.
+          su builder -c "ls -ld $PWD/_build"
+
+      # Not a stub: rpmspec expands %{?dist} on the running distro, so this asserts
+      # the container is the distro we think it is, that the spec still parses
+      # there, and that the filenames the release job will upload are the expected
+      # ones.
+      - name: dry run
+        run: |
+          set -eu
+          spec=packages/noctalia/noctalia.spec
+          echo "  srpm:    $(rpmspec -q --srpm --qf '%{name}-%{version}-%{release}' "$spec")"
+          echo '  would publish:'
+          rpmspec -q --qf '    %{name}-%{version}-%{release}.%{arch}.rpm\n' "$spec" \
+            | grep -vE -- '-debug(info|source)-'
+
+      # ----------------------------------------------------------------------
+      # Everything below is stage 2. Verbatim from .woodpecker/noctalia.yaml.
+      #
+      # Woodpecker joins a step's commands into ONE shell, so state leaks between
+      # lines by design. GitHub Actions runs each `run:` in a SEPARATE shell, so the
+      # whole sequence is one `run: |` block. Every path stays absolute and there is
+      # no cd, for the same reason it was written that way for Woodpecker.
+      # ----------------------------------------------------------------------
+      - name: build
+        if: env.RPM_BUILD_ENABLED == 'true'
+        run: |
+          set -eux
+          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/noctalia/noctalia.spec
+          dnf -y builddep packages/noctalia/noctalia.spec
+
+          # The chown is repeated because spectool just wrote sources into _build as
+          # root; without it rpmbuild cannot read its own SOURCES as `builder`.
+          chown -R builder:builder _build
+          su builder -c "rpmbuild --define '_topdir $PWD/_build' -ba $PWD/packages/noctalia/noctalia.spec"
+
+          cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
+          sha256sum output/*.rpm
+
+      # Signed here rather than at publish time so the Release asset is byte for
+      # byte what dnf serves -- otherwise anyone grabbing an RPM off the Releases
+      # page gets an unsigned file that gpgcheck=1 refuses.
+      #
+      # No `set -x` in this step: it would echo the key material into the log.
+      - name: sign
+        if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GPG_KEY: ${{ secrets.RPM_GPG_KEY }}
+        run: |
+          set -eu
+          dnf -y install rpm-sign gnupg2
+
+          # rpmsign shells out to gpg, so the key has to be in a keyring rather than
+          # just on disk. The key carries no passphrase, which is what lets gpg run
+          # with rpm's default --pinentry-mode cancel.
+          printf '%s\n' "$GPG_KEY" | gpg --batch --import
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F':' '/^fpr/{print $10; exit}')
+
+          # Binary RPMs only. debuginfo, debugsource and the SRPM are all
+          # rebuildable from the tagged spec, so they stay out of the repo.
+          mkdir -p publish
+          cp $(ls output/*.rpm | grep -vE -- '-debug(info|source)-|\.src\.rpm$') publish/
+          rpmsign --define "_gpg_name $FPR" --addsign publish/*.rpm
+
+          # Verify against the key that just made the signatures. Do NOT test this
+          # by checking that a signature tag is populated: %{SIGPGP} is the legacy
+          # tag and reads (none) on rpm 4.20 even for a correctly signed package, so
+          # that check rejects every build. Importing the public key and letting rpm
+          # verify is the honest test, and -v records the key ID in the log.
+          gpg --export --armor "$FPR" > /tmp/rpm-pubkey.asc
+          rpm --import /tmp/rpm-pubkey.asc
+          if ! rpm -Kv publish/*.rpm; then echo 'signature verification failed'; exit 1; fi
+
+      - name: upload build output
+        if: env.RPM_BUILD_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpms-fedora-44
+          path: output/*.rpm
+          if-no-files-found: error
+
+      - name: upload publishable rpms
+        if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-fedora-44
+          path: publish/*.rpm
+          if-no-files-found: error
+
+  # A separate job on the host runner rather than a step in the container: `gh` is
+  # preinstalled there and is not packaged for every distro we build in. See
+  # build-fish.yml for the other reason -- a matrix would otherwise have each axis
+  # racing to create the same release.
+  #
+  # `env` is not available in a job-level `if:`, only in a step-level one, so during
+  # stage 1 this job runs on a tag and skips every step. That is expected; it
+  # creates nothing.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: download publishable rpms
+        if: env.RPM_BUILD_ENABLED == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          pattern: publish-*
+          merge-multiple: true
+          path: publish
+
+      - name: create release
+        if: env.RPM_BUILD_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes "Built from \`$GITHUB_REF_NAME\`." publish/*.rpm \
+            || gh release upload "$GITHUB_REF_NAME" --clobber publish/*.rpm

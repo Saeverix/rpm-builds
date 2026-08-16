@@ -1,0 +1,256 @@
+# Translated from .woodpecker/fish.yaml, which is still the live pipeline. Until
+# cutover, BOTH run on a `fish-*` tag: Woodpecker builds and publishes to the K3s
+# repo, this one currently stops before rpmbuild. See RPM_BUILD_ENABLED.
+#
+# One tag fans out to two distros. Each matrix entry is its own job, so `fish-4.8.1-1`
+# produces fish-4.8.1-1.fc44 AND fish-4.8.1-1.el10. An RPM cannot be shared between
+# them: EL10 is glibc 2.39 against Fedora 44's 2.43, the sonames differ, and %{?dist}
+# differs. One spec still covers both -- fish needs no conditionals.
+#
+# Unlike under Woodpecker, the axes no longer publish independently: both feed the
+# single release job at the bottom, which runs only once both have succeeded. So a
+# tag can no longer end up half-released with Fedora clients ahead of EL10 ones.
+name: build fish
+
+on:
+  push:
+    tags:
+      - 'fish-*'
+      # Stage-1 only. Woodpecker matches refs/tags/fish-* and its publish step is
+      # NOT disabled, so a test tag using the real prefix would sign a build and
+      # rsync it into the live K3s repo. `citest-` matches nothing in Woodpecker's
+      # ref.include. Remove once .woodpecker/ is gone.
+      - 'citest-fish-*'
+  pull_request:
+    paths:
+      - 'packages/fish/**'
+      - '.github/workflows/build-fish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # STAGE 1: prepare the build environment, prove the spec parses, then stop.
+  # Everything from `rpmbuild` onwards is written out below but skipped. Flip this
+  # to 'true' to turn on the real build, signing and release upload.
+  RPM_BUILD_ENABLED: 'false'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Each axis stands alone -- a Fedora failure should not hide whether EL10
+      # builds. The release job below needs both to succeed before it runs.
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora
+            releasever: '44'
+            image: registry.fedoraproject.org/fedora:44
+          # quay.io/almalinux/almalinux:10 does NOT resolve -- the org path is
+          # almalinuxorg. Getting this wrong fails at image pull with a confusing
+          # manifest error.
+          - distro: almalinux
+            releasever: '10'
+            image: quay.io/almalinuxorg/almalinux:10
+    container:
+      image: ${{ matrix.image }}
+    env:
+      DISTRO: ${{ matrix.distro }}
+    steps:
+      # Neither base image ships a git binary, so checkout falls back to fetching a
+      # tarball through the REST API and leaves NO .git directory in the workspace.
+      # The git-core installed below is for `cargo vendor`, not for this.
+      - uses: actions/checkout@v5
+
+      - name: prepare build environment
+        run: |
+          set -eux
+          # git-core is required here, unlike in build-mangowm.yml where its absence
+          # is deliberate: `cargo vendor` in the build step clones fish's four git
+          # dependencies. Do not "harmonise" the two workflows on this point.
+          dnf -y install rpm-build rpmdevtools cargo git-core
+
+          # The builddep plugin is packaged differently per distro, so it is
+          # installed per axis rather than through one clever portable name. Fedora
+          # 44 is dnf5 and wants dnf5-plugins; EL10 is still dnf4 (4.20.0), where
+          # dnf5-plugins does not exist at all.
+          if [ "$DISTRO" = fedora ]; then dnf -y install dnf5-plugins; fi
+          # CRB is not optional -- several of fish's build dependencies live there
+          # and builddep cannot resolve without it. EPEL supplies the rest.
+          # AlmaLinux has no `devel` repo; that is CentOS Stream, so do not reach
+          # for it here.
+          if [ "$DISTRO" = almalinux ]; then dnf -y install epel-release dnf-plugins-core && dnf config-manager --set-enabled crb; fi
+
+          mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
+
+          # rpmbuild must NOT run as root. fish's %check includes tests that assert
+          # on unreadable files and directories (init-unreadable-cwd,
+          # init-unreadable-config-paths, cd, path, fish_config, indent), and root
+          # bypasses those permissions, so they fail: 197/203 as root, 203/203
+          # unprivileged. Fedora never sees this because mock builds as "mockbuild".
+          # dnf still needs root, so only rpmbuild is dropped.
+          id builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder _build
+
+          # Prove `builder` can actually reach the workspace before stage 2 depends
+          # on it. The runner's /__w path is not something this repo controls, and a
+          # traversal failure here would otherwise surface as a confusing rpmbuild
+          # error much later.
+          su builder -c "ls -ld $PWD/_build"
+
+      # Not a stub: rpmspec expands %{?dist} on the running distro, so this is the
+      # assertion that each axis really is the distro it claims -- the fedora axis
+      # must print .fc44 and the almalinux axis .el10. It also proves the spec
+      # parses on both, and names the exact files the release job will upload.
+      - name: dry run
+        run: |
+          set -eu
+          spec=packages/fish/fish.spec
+          echo "  srpm:    $(rpmspec -q --srpm --qf '%{name}-%{version}-%{release}' "$spec")"
+          echo '  would publish:'
+          rpmspec -q --qf '    %{name}-%{version}-%{release}.%{arch}.rpm\n' "$spec" \
+            | grep -vE -- '-debug(info|source)-'
+
+      # ----------------------------------------------------------------------
+      # Everything below is stage 2. Verbatim from .woodpecker/fish.yaml.
+      #
+      # Woodpecker joins a step's commands into ONE shell, so SOURCES/VER/SRC/VENDOR
+      # carry across lines by design. GitHub Actions runs each `run:` in a SEPARATE
+      # shell, so the whole sequence is one `run: |` block. Splitting it into
+      # per-line steps would drop those variables on the floor and the vendor
+      # tarball would be built in the wrong place, or not at all.
+      # ----------------------------------------------------------------------
+      - name: build
+        if: env.RPM_BUILD_ENABLED == 'true'
+        run: |
+          set -eux
+          # Fetches Source0/1/2, which have URLs. Source3 (the vendor tarball) has a
+          # bare filename, so spectool skips it and we build it below.
+          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/fish/fish.spec
+
+          # Vendor the cargo dependencies so %build can run with CARGO_NET_OFFLINE.
+          # Every path below is absolute, and a stray `cd` would leak across the
+          # rest of this block -- which is why the one that is needed is in a
+          # subshell.
+          SOURCES=$PWD/_build/SOURCES
+          VER=$(rpmspec -q --qf '%{version}\n' --srpm packages/fish/fish.spec)
+          SRC=$SOURCES/fish-$VER
+          VENDOR=$SOURCES/vendor-tmp
+          rm -rf "$SRC" "$VENDOR"
+          tar -C "$SOURCES" -xf "$SOURCES/fish-$VER.tar.xz"
+          mkdir -p "$VENDOR/.cargo"
+          # cargo vendor gets NO output path and runs from $VENDOR, because it
+          # writes whatever path it is given into config.toml verbatim, and this
+          # tarball is unpacked at the root of the source tree where the directory
+          # must be exactly "vendor". Give it a path and the build dies with "failed
+          # to read root of directory source". The cat preserves upstream's [alias]
+          # xtask stanza, which cargo's [source] replacement would otherwise clobber.
+          (cd "$VENDOR" && { cat "$SRC/.cargo/config.toml"; cargo vendor --manifest-path "$SRC/Cargo.toml"; } > .cargo/config.toml)
+          tar -C "$VENDOR" -cJf "$SOURCES/fish-$VER-vendor.tar.xz" vendor .cargo
+          rm -rf "$SRC" "$VENDOR"
+
+          dnf -y builddep packages/fish/fish.spec
+
+          # Repeated from the prepare step because spectool and cargo vendor have
+          # since written into _build as root; without this rpmbuild cannot read its
+          # own SOURCES as `builder`.
+          chown -R builder:builder _build
+          su builder -c "rpmbuild --define '_topdir $PWD/_build' -ba $PWD/packages/fish/fish.spec"
+
+          cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
+          sha256sum output/*.rpm
+
+      # Signed here rather than at publish time so the Release asset is byte for
+      # byte what dnf serves -- otherwise anyone grabbing an RPM off the Releases
+      # page gets an unsigned file that gpgcheck=1 refuses.
+      #
+      # rpm -Kv behaves the same on EL10's rpm 4.19 as on Fedora's 4.20, so this
+      # step needs no distro special case.
+      #
+      # No `set -x` in this step: it would echo the key material into the log.
+      - name: sign
+        if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GPG_KEY: ${{ secrets.RPM_GPG_KEY }}
+        run: |
+          set -eu
+          dnf -y install rpm-sign gnupg2
+
+          # rpmsign shells out to gpg, so the key has to be in a keyring rather than
+          # just on disk. The key carries no passphrase, which is what lets gpg run
+          # with rpm's default --pinentry-mode cancel.
+          printf '%s\n' "$GPG_KEY" | gpg --batch --import
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F':' '/^fpr/{print $10; exit}')
+
+          # Binary RPMs only. debuginfo, debugsource and the SRPM are all
+          # rebuildable from the tagged spec, so they stay out of the repo.
+          mkdir -p publish
+          cp $(ls output/*.rpm | grep -vE -- '-debug(info|source)-|\.src\.rpm$') publish/
+          rpmsign --define "_gpg_name $FPR" --addsign publish/*.rpm
+
+          # Verify against the key that just made the signatures. Do NOT test this
+          # by checking that a signature tag is populated: %{SIGPGP} is the legacy
+          # tag and reads (none) on rpm 4.20 even for a correctly signed package, so
+          # that check rejects every build. Importing the public key and letting rpm
+          # verify is the honest test, and -v records the key ID in the log.
+          gpg --export --armor "$FPR" > /tmp/rpm-pubkey.asc
+          rpm --import /tmp/rpm-pubkey.asc
+          if ! rpm -Kv publish/*.rpm; then echo 'signature verification failed'; exit 1; fi
+
+      # Artifact names carry the axis because upload-artifact@v4 requires them to be
+      # unique across a matrix.
+      - name: upload build output
+        if: env.RPM_BUILD_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpms-${{ matrix.distro }}-${{ matrix.releasever }}
+          path: output/*.rpm
+          if-no-files-found: error
+
+      - name: upload publishable rpms
+        if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-${{ matrix.distro }}-${{ matrix.releasever }}
+          path: publish/*.rpm
+          if-no-files-found: error
+
+  # A separate job on the host runner rather than a step in each container, for two
+  # reasons: `gh` is preinstalled there and is not packaged for AlmaLinux, and both
+  # axes would otherwise race to create the same release. Collecting both axes'
+  # artifacts here means one release per tag carrying both the .fc44 and the .el10
+  # RPMs -- which is also what removes Woodpecker's half-published failure mode.
+  #
+  # `env` is not available in a job-level `if:`, only in a step-level one, so during
+  # stage 1 this job runs on a tag and skips every step. That is expected; it
+  # creates nothing.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: download publishable rpms
+        if: env.RPM_BUILD_ENABLED == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          pattern: publish-*
+          merge-multiple: true
+          path: publish
+
+      - name: create release
+        if: env.RPM_BUILD_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes "Built from \`$GITHUB_REF_NAME\`." publish/*.rpm \
+            || gh release upload "$GITHUB_REF_NAME" --clobber publish/*.rpm
