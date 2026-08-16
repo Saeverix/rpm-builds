@@ -108,6 +108,26 @@ jobs:
             exit 1
           fi
 
+          # THE RULE, the same in all four workflows: root does dnf, everything else
+          # runs as `builder`. rpmbuild as root is the anomaly, not the exception --
+          # mock builds every Fedora package as "mockbuild" whether or not its %check
+          # cares. None of these ten packages has a %check at all, so the payoff here
+          # is the other one: root hides packaging bugs. An %install that writes
+          # outside %{buildroot}, or a build that reaches into /usr, succeeds silently
+          # as root and fails loudly as builder.
+          #
+          # This is the only chown in the workflow. Because spectool drops privileges
+          # too, root never writes into _build after this line, so there is nothing to
+          # keep re-chowning between the ten links of the chain.
+          id builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder _build
+
+          # Prove `builder` can traverse to the workspace before the build depends on
+          # it. The runner's /__w path is not something this repo controls, and a
+          # traversal failure would otherwise surface as a confusing rpmbuild error
+          # ten packages deep.
+          runuser -u builder -- ls -ld "$PWD/_build"
+
       # Not a stub: rpmspec expands %{?dist} on the running distro, so this asserts
       # the container is the distro we think it is, that all ten specs still parse
       # there, and that the filenames the release job will upload are the expected
@@ -152,54 +172,70 @@ jobs:
           # _build/RPMS/noarch as well as x86_64, because hyprland-protocols-devel
           # and glaze-devel are noarch. Debug packages are skipped: nothing needs
           # them and they drag in extra deps.
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprwayland-scanner/hyprwayland-scanner.spec
+          #
+          # The alternation repeated ten times below is deliberate, not an oversight:
+          # `dnf` needs root, spectool and rpmbuild do not and must not have it.
+          # runuser takes an argv list rather than a command string, so there is no
+          # nested quoting to get wrong -- $PWD still expands in this (root) shell
+          # before exec, so the paths stay absolute exactly as they were under
+          # Woodpecker.
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprwayland-scanner/hyprwayland-scanner.spec
           dnf -y builddep packages/hyprwayland-scanner/hyprwayland-scanner.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprwayland-scanner/hyprwayland-scanner.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprwayland-scanner/hyprwayland-scanner.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprland-protocols/hyprland-protocols.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprland-protocols/hyprland-protocols.spec
           dnf -y builddep packages/hyprland-protocols/hyprland-protocols.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprland-protocols/hyprland-protocols.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprland-protocols/hyprland-protocols.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/glaze/glaze.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/glaze/glaze.spec
           dnf -y builddep packages/glaze/glaze.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/glaze/glaze.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/glaze/glaze.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprutils/hyprutils.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprutils/hyprutils.spec
           dnf -y builddep packages/hyprutils/hyprutils.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprutils/hyprutils.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprutils/hyprutils.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprlang/hyprlang.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprlang/hyprlang.spec
           dnf -y builddep packages/hyprlang/hyprlang.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprlang/hyprlang.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprlang/hyprlang.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprwire/hyprwire.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprwire/hyprwire.spec
           dnf -y builddep packages/hyprwire/hyprwire.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprwire/hyprwire.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprwire/hyprwire.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprgraphics/hyprgraphics.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprgraphics/hyprgraphics.spec
           dnf -y builddep packages/hyprgraphics/hyprgraphics.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprgraphics/hyprgraphics.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprgraphics/hyprgraphics.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprcursor/hyprcursor.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprcursor/hyprcursor.spec
           dnf -y builddep packages/hyprcursor/hyprcursor.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprcursor/hyprcursor.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprcursor/hyprcursor.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/aquamarine/aquamarine.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/aquamarine/aquamarine.spec
           dnf -y builddep packages/aquamarine/aquamarine.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/aquamarine/aquamarine.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/aquamarine/aquamarine.spec
           dnf -y install $(ls _build/RPMS/*/*.rpm | grep -v -- -debug)
 
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprland/hyprland.spec
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprland/hyprland.spec
           dnf -y builddep packages/hyprland/hyprland.spec
-          rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprland/hyprland.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprland/hyprland.spec
+
+          # The whole claim of this workflow, in one command. Ten packages and twenty
+          # alternating privileged/unprivileged commands is exactly where a root write
+          # could slip back in unnoticed; this fails the build instead.
+          if [ -n "$(find _build ! -user builder -print -quit)" ]; then
+            echo 'ERROR: root-owned files in _build; something ran privileged' >&2
+            find _build ! -user builder -ls | head >&2
+            exit 1
+          fi
 
           cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
           sha256sum output/*.rpm

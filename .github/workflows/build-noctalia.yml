@@ -57,20 +57,28 @@ jobs:
           dnf -y install rpm-build rpmdevtools dnf5-plugins git-core
           mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
 
-          # rpmbuild must NOT run as root. Four of the tests %check runs assert on
-          # file permissions -- calendar_cache_permissions,
-          # clipboard_storage_permissions, plugin_source_locks and secret_store --
-          # and root bypasses those, so they fail. Fedora never sees this because
-          # mock builds as "mockbuild". dnf still needs root, so only rpmbuild is
-          # dropped.
+          # THE RULE, the same in all four workflows: root does dnf, everything else
+          # runs as `builder`. rpmbuild as root is the anomaly, not the exception --
+          # mock builds every Fedora package as "mockbuild" whether or not its %check
+          # cares.
+          #
+          # noctalia is one of the two packages where %check actively DEPENDS on this:
+          # calendar_cache_permissions, clipboard_storage_permissions,
+          # plugin_source_locks and secret_store all assert on file permissions that
+          # root bypasses, so they fail when the build runs privileged. If you are
+          # ever tempted to simplify the drop away, those four tests are why.
+          #
+          # This is the only chown in the workflow. Because spectool drops privileges
+          # too, root never writes into _build after this line, so there is nothing to
+          # keep re-chowning.
           id builder >/dev/null 2>&1 || useradd -m builder
           chown -R builder:builder _build
 
-          # Prove `builder` can actually reach the workspace before stage 2 depends
+          # Prove `builder` can actually reach the workspace before the build depends
           # on it. The runner's /__w path is not something this repo controls, and a
           # traversal failure here would otherwise surface as a confusing rpmbuild
           # error much later.
-          su builder -c "ls -ld $PWD/_build"
+          runuser -u builder -- ls -ld "$PWD/_build"
 
       # Not a stub: rpmspec expands %{?dist} on the running distro, so this asserts
       # the container is the distro we think it is, that the spec still parses
@@ -97,13 +105,23 @@ jobs:
         if: env.RPM_BUILD_ENABLED == 'true'
         run: |
           set -eux
-          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/noctalia/noctalia.spec
+          # The alternation below is deliberate: `dnf` needs root, spectool and
+          # rpmbuild do not and must not have it. runuser takes an argv list rather
+          # than a command string, so there is no nested quoting to get wrong -- $PWD
+          # still expands in this (root) shell before exec, so the paths stay absolute
+          # exactly as they were under Woodpecker.
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/noctalia/noctalia.spec
           dnf -y builddep packages/noctalia/noctalia.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/noctalia/noctalia.spec
 
-          # The chown is repeated because spectool just wrote sources into _build as
-          # root; without it rpmbuild cannot read its own SOURCES as `builder`.
-          chown -R builder:builder _build
-          su builder -c "rpmbuild --define '_topdir $PWD/_build' -ba $PWD/packages/noctalia/noctalia.spec"
+          # The whole claim of this workflow, in one command. If a future edit
+          # reintroduces a root write into the build tree, this fails here rather
+          # than silently producing a package whose %check never really ran.
+          if [ -n "$(find _build ! -user builder -print -quit)" ]; then
+            echo 'ERROR: root-owned files in _build; something ran privileged' >&2
+            find _build ! -user builder -ls | head >&2
+            exit 1
+          fi
 
           cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
           sha256sum output/*.rpm

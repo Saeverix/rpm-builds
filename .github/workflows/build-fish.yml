@@ -90,20 +90,28 @@ jobs:
 
           mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
 
-          # rpmbuild must NOT run as root. fish's %check includes tests that assert
-          # on unreadable files and directories (init-unreadable-cwd,
-          # init-unreadable-config-paths, cd, path, fish_config, indent), and root
-          # bypasses those permissions, so they fail: 197/203 as root, 203/203
-          # unprivileged. Fedora never sees this because mock builds as "mockbuild".
-          # dnf still needs root, so only rpmbuild is dropped.
+          # THE RULE, the same in all four workflows: root does dnf, everything else
+          # runs as `builder`. rpmbuild as root is the anomaly, not the exception --
+          # mock builds every Fedora package as "mockbuild" whether or not its %check
+          # cares.
+          #
+          # fish is one of the two packages where %check actively DEPENDS on this:
+          # init-unreadable-cwd, init-unreadable-config-paths, cd, path, fish_config
+          # and indent all assert on unreadable files and directories that root
+          # bypasses. Privileged that is 197/203; unprivileged it is 203/203. If you
+          # are ever tempted to simplify the drop away, those six tests are why.
+          #
+          # This is the only chown in the workflow. Because spectool and cargo vendor
+          # drop privileges too, root never writes into _build after this line, so
+          # there is nothing to keep re-chowning.
           id builder >/dev/null 2>&1 || useradd -m builder
           chown -R builder:builder _build
 
-          # Prove `builder` can actually reach the workspace before stage 2 depends
+          # Prove `builder` can actually reach the workspace before the build depends
           # on it. The runner's /__w path is not something this repo controls, and a
           # traversal failure here would otherwise surface as a confusing rpmbuild
           # error much later.
-          su builder -c "ls -ld $PWD/_build"
+          runuser -u builder -- ls -ld "$PWD/_build"
 
       # Not a stub: rpmspec expands %{?dist} on the running distro, so this is the
       # assertion that each axis really is the distro it claims -- the fedora axis
@@ -131,6 +139,17 @@ jobs:
         if: env.RPM_BUILD_ENABLED == 'true'
         run: |
           set -eux
+          # Everything that does not need root runs as `builder` in one unprivileged
+          # shell, so nothing root-owned ever lands in _build. A heredoc rather than
+          # `runuser -u builder -- ...` per line because these commands share state:
+          # SOURCES/VER/SRC/VENDOR carry across them, exactly as they did in the one
+          # shell Woodpecker gave a step. The delimiter is quoted, so this (root)
+          # shell expands nothing -- every variable below is builder's own. runuser
+          # preserves the working directory, so $PWD is still the workspace.
+          #
+          # cargo needs a writable HOME for its registry cache; runuser sets
+          # HOME=/home/builder, which `useradd -m` created in the prepare step.
+          runuser -u builder -- sh -euxs <<'BUILDER'
           # Fetches Source0/1/2, which have URLs. Source3 (the vendor tarball) has a
           # bare filename, so spectool skips it and we build it below.
           spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/fish/fish.spec
@@ -155,14 +174,21 @@ jobs:
           (cd "$VENDOR" && { cat "$SRC/.cargo/config.toml"; cargo vendor --manifest-path "$SRC/Cargo.toml"; } > .cargo/config.toml)
           tar -C "$VENDOR" -cJf "$SOURCES/fish-$VER-vendor.tar.xz" vendor .cargo
           rm -rf "$SRC" "$VENDOR"
+          BUILDER
 
+          # Root again, and only for this: builddep installs packages.
           dnf -y builddep packages/fish/fish.spec
 
-          # Repeated from the prepare step because spectool and cargo vendor have
-          # since written into _build as root; without this rpmbuild cannot read its
-          # own SOURCES as `builder`.
-          chown -R builder:builder _build
-          su builder -c "rpmbuild --define '_topdir $PWD/_build' -ba $PWD/packages/fish/fish.spec"
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/fish/fish.spec
+
+          # The whole claim of this workflow, in one command. If a future edit
+          # reintroduces a root write into the build tree, this fails here rather
+          # than silently producing a package whose %check scored 197/203.
+          if [ -n "$(find _build ! -user builder -print -quit)" ]; then
+            echo 'ERROR: root-owned files in _build; something ran privileged' >&2
+            find _build ! -user builder -ls | head >&2
+            exit 1
+          fi
 
           cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
           sha256sum output/*.rpm
