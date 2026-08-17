@@ -218,6 +218,28 @@ packages/<name>/<name>.spec       one directory per source package
 > live: `.woodpecker/` publishes to `rpm.<dev-domain>` on K3s, and Actions publishes to
 > `https://saeverix.github.io/rpm-builds/`. Client config for the latter is in `repo/`.
 >
+> **GitHub-side settings that are not in version control**, the counterpart to
+> Woodpecker needing **Tag** in *Allowed events*:
+>
+> - Repository must be **public** — Pages requires it on the Free plan.
+> - Settings → Pages → *Build and deployment* → Source: **GitHub Actions**.
+> - `RPM_GPG_KEY` repository secret: the armoured private key, same one Woodpecker's
+>   `rpm_gpg_key` holds. Export it with
+>   `gpg --export-secret-keys --armor <fingerprint>`.
+> - Settings → Environments → `github-pages` → *Deployment branches and tags* must
+>   allow **tags**, pattern `*`, in addition to the `main` branch rule GitHub creates
+>   by default. Publishing is only ever tag-triggered, so without a tag rule the
+>   deploy job is rejected by the environment **after a full build has already run** —
+>   and merging to `main` does not help, because the ref is still a tag.
+>
+> Two constraints worth knowing before changing how `publish-pages.yml` is reached.
+> A release created by `gh release create` with the default `GITHUB_TOKEN` does **not**
+> emit events that start other workflows — GitHub blocks that to stop workflows
+> recursing — so a `release: published` trigger silently never fires. And
+> `workflow_run` / `workflow_dispatch` only work for workflow files that exist on the
+> default branch. That is why the build workflows call `publish-pages.yml` directly
+> with `uses:` instead.
+>
 > Both fire on the same tag, so a tag builds twice until cutover. The GitHub
 > workflows also accept a `citest-<package>-*` tag prefix, which matches nothing in
 > Woodpecker's `ref:` filters — use it to exercise the GitHub side without

@@ -18,11 +18,30 @@
 name: publish pages
 
 on:
-  # Every build-*.yml release lands here.
+  # How CI actually reaches this workflow: each build-*.yml calls it directly after
+  # its release job.
+  #
+  # It is NOT triggered by `release: published`, and that is not an oversight. A
+  # release created by `gh release create` with the default GITHUB_TOKEN does not emit
+  # events that start other workflows -- GitHub blocks that to prevent workflows
+  # recursing. So a release-triggered version of this workflow silently never runs.
+  # (The same rule is why a Renovate PR needs a PAT or App token to get built.)
+  #
+  # workflow_call also sidesteps two constraints that would bite on a branch:
+  # `workflow_run` and `workflow_dispatch` only work for workflow files that exist on
+  # the default branch, so neither is usable until this merges to main.
+  workflow_call:
+
+  # Kept for releases created BY HAND through the web UI, which do emit the event
+  # because a person's token made them. Harmless alongside workflow_call today; if a
+  # PAT is ever used for `gh release create`, this would start firing too and want
+  # removing to avoid a double publish.
   release:
     types: [published]
+
   # Regenerate the metadata without a new package -- after deleting a release, or to
-  # pick up a change to repo/*.repo or repo/index.html.
+  # pick up a change to repo/*.repo or repo/index.html. Only available once this file
+  # is on the default branch.
   workflow_dispatch:
 
 permissions:
@@ -93,6 +112,11 @@ jobs:
           # workflows already exclude them before uploading. Cheap insurance against a
           # release created by hand.
           for f in incoming/*.rpm; do
+            # No RPMs at all is legitimate, not an error: it is what you get after
+            # deleting every release and re-running to clear the repo. Without this
+            # the unexpanded glob falls through to the catch-all below and fails the
+            # workflow with "cannot place incoming/*.rpm".
+            [ -e "$f" ] || continue
             case "$f" in *-debuginfo-*|*-debugsource-*|*.src.rpm) continue ;; esac
             case "$f" in
               *.fc44.*) cp "$f" site/fedora/44/x86_64/ ;;
