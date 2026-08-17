@@ -56,6 +56,29 @@ jobs:
           # quay.io/almalinux/almalinux:10 does NOT resolve -- the org path is
           # almalinuxorg. Getting this wrong fails at image pull with a confusing
           # manifest error.
+          #
+          # Every almalinuxorg tag (:10, :10.2, and the dated ones) carries TWO amd64
+          # manifests: variant=v2 and variant=none. They are the same AlmaLinux 10.2
+          # built to different CPU baselines -- x86-64-v2 versus x86-64-v3 -- with
+          # their build dependencies coming from x86_64_v2/os/ or $basearch/os/
+          # respectively. Both report _target_cpu=x86_64, so both produce a package
+          # named .el10.x86_64.rpm; the baseline is not visible in the filename.
+          #
+          # GitHub's runners resolve this tag to the v2 entry; a local podman resolves
+          # it to the plain one. So the same tag yields a different CPU baseline
+          # depending on which host pulls it, and that is ACCEPTED here rather than
+          # pinned: v2 runs on strictly more hardware than v3, so CI's choice is the
+          # more permissive one. The consequence to know is that the .el10 RPM this
+          # publishes is a v2 build sharing an NVR with the v3 build Woodpecker put in
+          # the K3s repo.
+          #
+          # If you ever need the baseline pinned rather than inherited, the tag-based
+          # way is docker.io/library/almalinux:10 -- verified byte-equivalent to
+          # quay's plain manifest (almalinux-release-10.2-21.el10.x86_64,
+          # -march=x86-64-v3, AppStream at $basearch/os/) and carrying a single amd64
+          # manifest, so nothing gets selected. Cost: Docker Hub rate-limits anonymous
+          # pulls and runners share IPs. Do NOT reach for a version tag on quay to fix
+          # this -- :10.2 and the dated tags carry both variants too.
           - distro: almalinux
             releasever: '10'
             image: quay.io/almalinuxorg/almalinux:10

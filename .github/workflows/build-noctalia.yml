@@ -1,6 +1,7 @@
-# Translated from .woodpecker/noctalia.yaml, which is still the live pipeline.
-# Until cutover, BOTH run on a `noctalia-*` tag: Woodpecker builds and publishes to
-# the K3s repo, this one currently stops before rpmbuild. See RPM_BUILD_ENABLED.
+# Translated from .woodpecker/noctalia.yaml. Both are switched on, so until cutover
+# a `noctalia-*` tag builds twice and publishes twice: Woodpecker signs and rsyncs to
+# the K3s repo, this one signs and attaches the RPMs to a GitHub Release which
+# publish-pages.yml then turns into a dnf repo. Same key, same NVR, two destinations.
 name: build noctalia
 
 on:
@@ -28,15 +29,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # STAGE 1: prepare the build environment, prove the spec parses, then stop.
-  # Everything from `rpmbuild` onwards is written out below but skipped. Flip this
-  # to 'true' to turn on the real build, signing and release upload.
-  RPM_BUILD_ENABLED: 'false'
+  # Enabled: this workflow builds, signs and publishes for real. Second one turned on
+  # after mangowm, chosen deliberately as the cheap single-variable test of the
+  # unprivileged build -- single distro, no matrix, and a %check that genuinely
+  # depends on not being root. build-hyprland.yml and build-fish.yml still stop after
+  # the dry run.
+  #
+  # The sign step needs the RPM_GPG_KEY repository secret; without it the step fails
+  # rather than silently shipping unsigned RPMs.
+  RPM_BUILD_ENABLED: 'true'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Generous for a first real run: a C++23/meson build plus a test suite that drives
+    # real git repositories. Lower it once you have seen the actual wall clock.
+    timeout-minutes: 90
     container:
       image: registry.fedoraproject.org/fedora:44
     steps:
