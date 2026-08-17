@@ -178,9 +178,19 @@ jobs:
           # The key that signs the metadata must be the key clients are told to trust.
           # If repo/RPM-GPG-KEY-saeverix ever drifts from the signing secret, every
           # client fails `dnf makecache` with an unhelpful error -- catch it here.
-          if ! diff -q site/RPM-GPG-KEY-saeverix repo/RPM-GPG-KEY-saeverix >/dev/null; then
+          #
+          # Compared by FINGERPRINT rather than by diffing the two files, for two
+          # reasons. `diff` is not in the Fedora base image and diffutils is not among
+          # the packages this job installs, so a file comparison reports "keys do not
+          # match" when what actually happened is that diff was missing. And armoured
+          # output is not byte-stable regardless: gpg can emit different version
+          # headers or comments for an identical key, so the file comparison could fail
+          # while the key is perfectly correct.
+          COMMITTED=$(gpg --show-keys --with-colons repo/RPM-GPG-KEY-saeverix \
+            | awk -F':' '/^fpr/{print $10; exit}')
+          if [ "$COMMITTED" != "$FPR" ]; then
             echo 'ERROR: RPM_GPG_KEY does not match repo/RPM-GPG-KEY-saeverix' >&2
-            gpg --show-keys --with-colons repo/RPM-GPG-KEY-saeverix | awk -F: '/^fpr/{print "  committed: " $10}' >&2
+            echo "  committed: ${COMMITTED:-<no fingerprint found>}" >&2
             echo "  signing:   $FPR" >&2
             exit 1
           fi
