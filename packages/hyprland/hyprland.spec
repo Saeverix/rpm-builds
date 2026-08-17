@@ -4,7 +4,7 @@
 %global lua_ver 5.5.1
 
 Name:           hyprland
-Version:        0.56.1
+Version:        0.56.2
 Release:        1%{?dist}
 Summary:        Dynamic tiling Wayland compositor with eye candy
 
@@ -216,5 +216,8 @@ export PKG_CONFIG_PATH=$LUA_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_
 %{_datadir}/pkgconfig/hyprland.pc
 
 %changelog
+* Mon Aug 17 2026 Saeverix - 0.56.2-1
+- Bumped to 0.56.2
+
 * Wed Aug 05 2026 Saeverix - 0.56.1-1
 - Initial package

@@ -9,9 +9,9 @@ x86_64.
 | Package | Version | Workflow | Targets | Upstream |
 | --- | --- | --- | --- | --- |
 | `scenefx`, `scenefx-devel` | 0.5.0 (tag `0.5`) | `mangowm` | fc44 | <https://github.com/wlrfx/scenefx> |
-| `mangowm` | 0.15.6 | `mangowm` | fc44 | <https://github.com/mangowm/mango> |
+| `mangowm` | 0.16.1 | `mangowm` | fc44 | <https://github.com/mangowm/mango> |
 | `fish` | 4.8.1 | `fish` | fc44, el10 | <https://github.com/fish-shell/fish-shell> |
-| `noctalia` | 5.0.0~beta.7 | `noctalia` | fc44 | <https://github.com/noctalia-dev/noctalia> |
+| `noctalia` | 5.0.0~beta.8 | `noctalia` | fc44 | <https://github.com/noctalia-dev/noctalia> |
 | `hyprwayland-scanner-devel` | 0.4.6 | `hyprland` | fc44 | <https://github.com/hyprwm/hyprwayland-scanner> |
 | `hyprland-protocols-devel` | 0.7.0 | `hyprland` | fc44 | <https://github.com/hyprwm/hyprland-protocols> |
 | `glaze-devel` | 7.2.0 | `hyprland` | fc44 | <https://github.com/stephenberry/glaze> |
@@ -20,8 +20,8 @@ x86_64.
 | `hyprwire`, `hyprwire-devel` | 0.3.1 | `hyprland` | fc44 | <https://github.com/hyprwm/hyprwire> |
 | `hyprgraphics`, `hyprgraphics-devel` | 0.5.1 | `hyprland` | fc44 | <https://github.com/hyprwm/hyprgraphics> |
 | `hyprcursor`, `hyprcursor-devel` | 0.1.13 | `hyprland` | fc44 | <https://github.com/hyprwm/hyprcursor> |
-| `aquamarine`, `aquamarine-devel` | 0.13.0 | `hyprland` | fc44 | <https://github.com/hyprwm/aquamarine> |
-| `hyprland`, `hyprland-devel` | 0.56.1 | `hyprland` | fc44 | <https://github.com/hyprwm/Hyprland> |
+| `aquamarine`, `aquamarine-devel` | 0.14.0 | `hyprland` | fc44 | <https://github.com/hyprwm/aquamarine> |
+| `hyprland`, `hyprland-devel` | 0.56.2 | `hyprland` | fc44 | <https://github.com/hyprwm/Hyprland> |
 
 Only `fish` builds for AlmaLinux 10. For the rest the blockers are missing build
 dependencies rather than anything in this repo:
@@ -122,6 +122,26 @@ records for this Hyprland release, because that is the only combination anybody 
 actually built and run; a stack assembled from whatever clears the `pkg-config`
 floor is a configuration with no testing behind it. `Hyprland --version` prints what
 it was built against, which is the quickest way to confirm the set is coherent.
+
+That pinning is looser than it sounds, and the exact rule matters when bumping.
+`flake.lock` records **commits, not tags** — for Hyprland 0.56.2 only
+`hyprwayland-scanner` sits exactly on a release (`v0.4.6`); every other input points
+at an untagged commit somewhere after one. So the rule here is: ship each library's
+**newest release at or before the commit that Hyprland's `flake.lock` pins**. That
+keeps us on tarballs RPM can name, while never getting ahead of a combination
+upstream has built.
+
+Two consequences that make "bump everything to its latest release" the wrong move,
+both recorded next to the `Version:` line in the spec they apply to:
+
+- **glaze must stay on 7.x.** Hyprland asks for `find_package(glaze 7...<8)`, so
+  glaze 8 is excluded by upstream's own range.
+- **hyprutils stays at 0.14.0** even though 0.14.1 exists, because 0.56.2's pinned
+  commit predates 0.14.1. It is the only library where newest-release and
+  what-upstream-tested currently disagree — everywhere else the pinned commit sits
+  *ahead* of the tag we ship, so the newest release is also the right one.
+
+Re-derive both when bumping Hyprland; neither is a permanent fact.
 
 Upstream's Fedora instructions ([discussion
 #284](https://github.com/hyprwm/Hyprland/discussions/284)) are useless now — they

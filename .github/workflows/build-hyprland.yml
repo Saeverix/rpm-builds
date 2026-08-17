@@ -1,8 +1,9 @@
 # Builds Hyprland and the nine packages it needs, in dependency order.
 #
-# Translated from .woodpecker/hyprland.yaml, which is still the live pipeline.
-# Until cutover, BOTH run on a `hyprland-*` tag: Woodpecker builds and publishes to
-# the K3s repo, this one currently stops before rpmbuild. See RPM_BUILD_ENABLED.
+# Translated from .woodpecker/hyprland.yaml. Both are switched on, so a `hyprland-*`
+# tag builds twice: Woodpecker signs and rsyncs to the K3s repo, this one signs and
+# attaches all ten packages' RPMs to a GitHub Release which publish-pages.yml turns
+# into a dnf repo.
 #
 # Fedora 44 has six of those libraries already, but every one of them is too old
 # for this Hyprland (hyprutils 0.7.1 against a required 0.14.0, for instance), and
@@ -73,18 +74,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # STAGE 1: prepare the build environment, prove the specs parse, then stop.
-  # Everything from `rpmbuild` onwards is written out below but skipped. Flip this
-  # to 'true' to turn on the real build, signing and release upload.
-  RPM_BUILD_ENABLED: 'false'
+  # Enabled: this workflow builds, signs and publishes for real. Last of the four to
+  # be turned on, and the only one never rehearsed locally -- ten packages is a slow
+  # thing to run twice, and it introduces no mechanism the other three have not
+  # already proven. Its first real run IS the test.
+  #
+  # What could still surprise: none of these ten has a %check, so the exposure is a
+  # %build or %install that quietly relied on root -- writing outside %{buildroot} or
+  # reaching into /usr. That fails loudly as `builder` with a permission error naming
+  # the path, which is the point of building unprivileged.
+  #
+  # The sign step needs the RPM_GPG_KEY repository secret; without it the step fails
+  # rather than silently shipping unsigned RPMs.
+  RPM_BUILD_ENABLED: 'true'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Stage 1 needs a couple of minutes. This is the expensive workflow once the
-    # build is on -- ten packages including a C++26 compile -- so raise it well
-    # clear of the wall clock then, against a 6h hard limit per job.
-    timeout-minutes: 30
+    # Ten packages including a C++26 compile of Hyprland itself. GitHub's own hard
+    # limit is 6h per job, so this sits just under it: there is no cheaper failure
+    # than hitting the ceiling, and public repos do not meter minutes. Lower it once
+    # you have seen a real wall clock.
+    timeout-minutes: 350
     container:
       image: registry.fedoraproject.org/fedora:44
     steps:

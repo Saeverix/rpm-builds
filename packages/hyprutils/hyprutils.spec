@@ -1,4 +1,10 @@
 Name:           hyprutils
+# 0.14.1 exists upstream and is deliberately not used. Hyprland v0.56.2's flake.lock
+# pins a hyprutils commit that PREDATES v0.14.1, so 0.14.1 is newer than anything
+# upstream has built this Hyprland against. Every other library here is pinned the
+# other way -- the flake.lock commit sits ahead of the tag we ship -- so this is the
+# one place where "newest release" and "what upstream tested" disagree. Re-check when
+# bumping Hyprland; see the hyprland section in README.md.
 Version:        0.14.0
 Release:        1%{?dist}
 Summary:        Utility library for the Hyprland ecosystem

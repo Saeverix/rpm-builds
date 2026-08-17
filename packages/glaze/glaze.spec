@@ -4,6 +4,10 @@
 %global debug_package %{nil}
 
 Name:           glaze
+# Do NOT bump this to 8.x. Hyprland's CMakeLists asks for `find_package(glaze
+# 7...<8)` and falls back to fetching v7.2.0, so glaze 8 is excluded by upstream's
+# own version range -- a "latest release" bump here breaks the Hyprland build rather
+# than improving anything. Checked against Hyprland v0.56.2.
 Version:        7.2.0
 Release:        1%{?dist}
 Summary:        Header-only C++ JSON and reflection library

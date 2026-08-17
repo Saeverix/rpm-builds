@@ -1,5 +1,5 @@
 Name:           aquamarine
-Version:        0.13.0
+Version:        0.14.0
 Release:        1%{?dist}
 Summary:        Rendering and backend library for Wayland compositors
 
@@ -57,7 +57,14 @@ Headers and pkgconfig file needed to build compositors against %{name}.
 %files
 %license LICENSE
 %doc README.md
-%{_libdir}/libaquamarine.so.12
+# The soname is spelled out rather than globbed on purpose: upstream hardcodes
+# `SOVERSION` as a literal in CMakeLists.txt (it is NOT derived from Version), so a
+# bump can move it without warning -- 0.13.0 shipped SOVERSION 12, 0.14.0 ships 13.
+# Naming it here turns that into a "File not found: libaquamarine.so.N" build
+# failure, which is what you want; a glob would package the new library under the old
+# assumptions and only break at link time in Hyprland. Read SOVERSION out of upstream
+# CMakeLists.txt on every version bump.
+%{_libdir}/libaquamarine.so.13
 %{_libdir}/libaquamarine.so.%{version}
 
 %files devel
@@ -66,5 +73,9 @@ Headers and pkgconfig file needed to build compositors against %{name}.
 %{_libdir}/pkgconfig/aquamarine.pc
 
 %changelog
+* Mon Aug 17 2026 Saeverix - 0.14.0-1
+- Bumped to 0.14.0, the newest release at or before the commit Hyprland
+  0.56.2's flake.lock pins
+
 * Wed Aug 05 2026 Saeverix - 0.13.0-1
 - Initial package, built for Hyprland
