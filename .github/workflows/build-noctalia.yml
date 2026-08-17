@@ -203,6 +203,11 @@ jobs:
         if: env.RPM_BUILD_ENABLED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job has no actions/checkout, so there is no git remote for gh to
+          # infer the repository from and it exits with "not a git repository".
+          # GH_REPO names the target directly. Adding a checkout would work too, but
+          # cloning the repo just to tell gh its own name is the wrong trade.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -eu
           gh release create "$GITHUB_REF_NAME" --verify-tag --notes "Built from \`$GITHUB_REF_NAME\`." publish/*.rpm \

@@ -205,9 +205,18 @@ packages/<name>/<name>.spec       one directory per source package
 > | --- | --- |
 > | `build-mangowm.yml` | **on** — builds, signs, attaches RPMs to a GitHub Release |
 > | `build-hyprland.yml`, `build-noctalia.yml`, `build-fish.yml` | off — start the container, install the toolchain, print the NVRs each spec parses to, then stop |
+> | `publish-pages.yml` | on — turns the Releases into a signed dnf repo on GitHub Pages |
 >
-> A GitHub Release is not yet a dnf repo. Serving one from GitHub Pages is the next
-> piece of work; until it lands, the K3s repo is what clients install from.
+> `publish-pages.yml` treats the published repo as a **pure function of the set of
+> GitHub Releases**: it downloads every release's RPMs, regenerates the metadata from
+> scratch and replaces the whole site. Adding a package is publishing a release;
+> removing one is deleting a release and re-running the workflow. That is also why
+> `repomd.xml` can be signed in the same job that writes it, which is what removes the
+> pull-it-back-over-ssh-and-sign step the `.woodpecker/` copies need.
+>
+> Until the DNS cutover, the two repos are served from different places and both are
+> live: `.woodpecker/` publishes to `rpm.<dev-domain>` on K3s, and Actions publishes to
+> `https://saeverix.github.io/rpm-builds/`. Client config for the latter is in `repo/`.
 >
 > Both fire on the same tag, so a tag builds twice until cutover. The GitHub
 > workflows also accept a `citest-<package>-*` tag prefix, which matches nothing in

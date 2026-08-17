@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saeverix RPM repository</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1a1a1a; --bg: #fdfdfc; --muted: #5c5c58;
+          --line: #dcdcd8; --code-bg: #f2f2ef; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e8e8e4; --bg: #161614; --muted: #a0a09a;
+            --line: #33332e; --code-bg: #22221f; }
+  }
+  body { margin: 0 auto; padding: 2.5rem 1.25rem 4rem; max-width: 46rem;
+         background: var(--bg); color: var(--fg); line-height: 1.6;
+         font-family: ui-sans-serif, system-ui, sans-serif; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.05rem; margin: 2.25rem 0 .6rem; padding-bottom: .3rem;
+       border-bottom: 1px solid var(--line); }
+  p.sub { color: var(--muted); margin: 0 0 2rem; }
+  pre { background: var(--code-bg); padding: .85rem 1rem; border-radius: 6px;
+        overflow-x: auto; font-size: .85rem; line-height: 1.5; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; }
+  td.mono, th.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                     font-size: .85rem; }
+  .fpr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem;
+         word-break: break-all; color: var(--muted); }
+  footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; }
+  a { color: inherit; text-decoration-color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Saeverix RPM repository</h1>
+<p class="sub">RPMs for tools that Fedora does not package, or ships too old. Built and
+signed by GitHub Actions from
+<a href="https://github.com/Saeverix/rpm-builds">Saeverix/rpm-builds</a>.</p>
+
+<h2>Install on Fedora</h2>
+<pre><code>sudo curl -o /etc/yum.repos.d/saeverix.repo \
+  https://saeverix.github.io/rpm-builds/saeverix.repo
+sudo rpm --import https://saeverix.github.io/rpm-builds/RPM-GPG-KEY-saeverix
+sudo dnf install mangowm</code></pre>
+
+<h2>Install on AlmaLinux 10</h2>
+<pre><code>sudo curl -o /etc/yum.repos.d/saeverix.repo \
+  https://saeverix.github.io/rpm-builds/saeverix-almalinux.repo
+sudo rpm --import https://saeverix.github.io/rpm-builds/RPM-GPG-KEY-saeverix
+sudo dnf install fish</code></pre>
+
+<h2>Use in a Fedora Atomic / bootc image</h2>
+<pre><code>RUN curl -o /etc/yum.repos.d/saeverix.repo \
+      https://saeverix.github.io/rpm-builds/saeverix.repo &amp;&amp; \
+    rpm --import https://saeverix.github.io/rpm-builds/RPM-GPG-KEY-saeverix &amp;&amp; \
+    dnf -y install mangowm &amp;&amp; \
+    dnf clean all</code></pre>
+<p>The repo files set <code>skip_if_unavailable=0</code> on purpose, so an unreachable
+repo fails the image build rather than quietly producing an image without these
+packages.</p>
+
+<h2>Trees</h2>
+<table>
+  <tr><th>Distro</th><th class="mono">Path</th><th>Contents</th></tr>
+  <tr><td>Fedora 44</td><td class="mono"><a href="fedora/44/x86_64/">fedora/44/x86_64/</a></td>
+      <td>everything</td></tr>
+  <tr><td>AlmaLinux 10</td><td class="mono"><a href="almalinux/10/x86_64/">almalinux/10/x86_64/</a></td>
+      <td><code>fish</code> only</td></tr>
+</table>
+
+<h2>Signing</h2>
+<p>Every package is signed, and <code>repomd.xml</code> carries a detached signature, so
+the repo files enable both <code>gpgcheck</code> and <code>repo_gpgcheck</code>.</p>
+<p class="fpr">2BE1 5FF9 C232 EAC2 4237&nbsp; DC91 2AC7 5B07 5AFD 843E</p>
+<p><a href="RPM-GPG-KEY-saeverix">RPM-GPG-KEY-saeverix</a></p>
+
+<footer>
+  The three newest builds of each package are kept, so a bad bump can be downgraded
+  away. <code>-debuginfo</code>, <code>-debugsource</code> and source RPMs are not
+  published — they are rebuildable from the tagged spec.
+</footer>
+
+</body>
+</html>

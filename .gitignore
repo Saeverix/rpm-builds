@@ -2,6 +2,10 @@
 /_build/
 /output/
 
+# publish-pages.yml working directories, in case it is ever run locally
+/site/
+/incoming/
+
 # downloaded upstream tarballs, in case anything drops them at the top level
 *.tar.gz
 *.tar.xz
