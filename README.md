@@ -190,9 +190,42 @@ compiler on every installed system. Plugins can still be built by hand against
 ## Layout
 
 ```
-.woodpecker/<workflow>.yaml    one workflow per thing you want to build
-packages/<name>/<name>.spec    one directory per source package
+.woodpecker/<workflow>.yaml       one workflow per thing you want to build
+.github/workflows/build-<x>.yml   the same, being migrated to GitHub Actions
+packages/<name>/<name>.spec       one directory per source package
 ```
+
+> **Migration in progress.** `.woodpecker/` is still the live pipeline and still the
+> only thing that publishes into the K3s dnf repo — everything below about building
+> and publishing describes it and is still accurate. The four workflows under
+> `.github/workflows/` are a translation of it, turned on one at a time by the
+> `RPM_BUILD_ENABLED` line at the top of each file:
+>
+> | Workflow | State |
+> | --- | --- |
+> | `build-mangowm.yml` | **on** — builds, signs, attaches RPMs to a GitHub Release |
+> | `build-hyprland.yml`, `build-noctalia.yml`, `build-fish.yml` | off — start the container, install the toolchain, print the NVRs each spec parses to, then stop |
+> | `publish-pages.yml` | on — turns the Releases into a signed dnf repo on GitHub Pages |
+>
+> `publish-pages.yml` treats the published repo as a **pure function of the set of
+> GitHub Releases**: it downloads every release's RPMs, regenerates the metadata from
+> scratch and replaces the whole site. Adding a package is publishing a release;
+> removing one is deleting a release and re-running the workflow. That is also why
+> `repomd.xml` can be signed in the same job that writes it, which is what removes the
+> pull-it-back-over-ssh-and-sign step the `.woodpecker/` copies need.
+>
+> Until the DNS cutover, the two repos are served from different places and both are
+> live: `.woodpecker/` publishes to `rpm.<dev-domain>` on K3s, and Actions publishes to
+> `https://saeverix.github.io/rpm-builds/`. Client config for the latter is in `repo/`.
+>
+> Both fire on the same tag, so a tag builds twice until cutover. The GitHub
+> workflows also accept a `citest-<package>-*` tag prefix, which matches nothing in
+> Woodpecker's `ref:` filters — use it to exercise the GitHub side without
+> Woodpecker signing a build and pushing it into the live repo.
+>
+> Once the migration lands, `.woodpecker/` and this note both go away, along with
+> the K3s repo: packages will be published as GitHub Releases and served as a dnf
+> repo from GitHub Pages.
 
 Each file in `.woodpecker/` is an independent workflow. Woodpecker runs them in
 parallel on separate agents, and each one matches only its own tag prefix, so
@@ -285,14 +318,18 @@ like a permission problem either: the symptoms are hundreds of
 hundreds of object files. If you want to inspect or validate something mid-build,
 either wait, or mount read-only (`:z,ro`) — a shared label does not get stolen.
 
-Cleaning up afterwards: fish's and noctalia's workflows build as an unprivileged
-user, and under rootless podman that leaves `_build` owned by a subuid your
-account cannot delete. `rm -rf _build` fails with "Permission denied"; use this
-instead:
+Cleaning up afterwards: the workflows build as an unprivileged user, and under
+rootless podman that leaves `_build` owned by a subuid your account cannot delete.
+`rm -rf _build` fails with "Permission denied"; use this instead:
 
 ```sh
 podman unshare rm -rf _build
 ```
+
+This used to apply only to fish and noctalia. The GitHub Actions workflows apply it
+to every package — see [Conventions](#conventions) — so expect it after any local
+run of one of those. The `.woodpecker/` copies still build hyprland and mangowm as
+root, so those leave a normally-owned `_build` until cutover.
 
 ## Publishing
 
@@ -380,6 +417,21 @@ Woodpecker secrets the publish step needs: `rpm_repo_host`, `rpm_ssh_key`,
 
 ## Conventions
 
+- **Root does `dnf`; everything else builds as `builder`.** In the GitHub Actions
+  workflows, root is used for exactly three things — installing the toolchain,
+  `dnf builddep`, and installing a just-built RPM so the next package in a chain can
+  link against it. `spectool`, `rpmbuild` and fish's `cargo vendor` all drop
+  privileges via `runuser -u builder`, so nothing root-owned ever lands in `_build`;
+  each build step asserts that with `find _build ! -user builder`.
+
+  This is not only about tests. `fish` and `noctalia` do need it — six and four of
+  their `%check` tests respectively assert on permissions that root bypasses, and
+  fish scores 197/203 privileged against 203/203 unprivileged — but the other
+  thirteen packages have no `%check` at all and still benefit: root hides packaging
+  bugs, because an `%install` that writes outside `%{buildroot}` succeeds silently as
+  root and fails loudly as `builder`. Fedora's own mock builds everything as
+  `mockbuild` for the same reason. The `.woodpecker/` copies still build hyprland and
+  mangowm as root; that difference goes away at cutover.
 - `%changelog` entries are attributed to `Saeverix`, with no email address. RPM
   treats everything after the date as free text, so the address Fedora's
   guidelines use is optional. If you add entries with `rpmdev-bumpspec`, pass

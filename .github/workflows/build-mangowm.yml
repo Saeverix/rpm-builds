@@ -1,0 +1,260 @@
+# Builds scenefx, then mangowm, which links against it.
+#
+# Translated from .woodpecker/mangowm.yaml. This is the first workflow switched on
+# for real, so until cutover BOTH build and both publish on a `mangowm-*` or
+# `scenefx-*` tag: Woodpecker signs and rsyncs to the K3s repo, this one signs and
+# attaches the RPMs to a GitHub Release. Same key, same NVR, two destinations.
+#
+# scenefx shares this workflow instead of getting its own because mangowm is the
+# only consumer: inside one workflow the handoff is just a `dnf install` of the
+# devel RPM we built a moment ago. Give it a workflow of its own the day a second
+# package needs it.
+name: build mangowm
+
+on:
+  push:
+    tags:
+      # Tags are matched on their name rather than on changed paths, exactly as in
+      # Woodpecker. Both prefixes are accepted because this workflow owns both
+      # packages -- tagging either builds and publishes the pair.
+      - 'mangowm-*'
+      - 'scenefx-*'
+      # Stage-1 only. Woodpecker matches refs/tags/mangowm-* and refs/tags/scenefx-*
+      # and its publish step is NOT disabled, so a test tag using the real prefixes
+      # would sign a build and rsync it into the live K3s repo. `citest-` matches
+      # nothing in Woodpecker's ref.include, so it exercises this workflow alone.
+      # Remove once .woodpecker/ is gone.
+      - 'citest-mangowm-*'
+  # Unlike the tag filter above, a path filter is well defined for a pull request --
+  # it diffs against the base branch. This is the trigger Woodpecker could not
+  # offer: it has no artifact store, so RPMs would not survive a non-publishing run
+  # and every spec had to be verified with a local podman build before tagging.
+  pull_request:
+    paths:
+      - 'packages/mangowm/**'
+      - 'packages/scenefx/**'
+      - '.github/workflows/build-mangowm.yml'
+  workflow_dispatch:
+
+# Least privilege by default. The release job below raises this for itself only.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a tag build -- it publishes. Superseded PR builds are fair game.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Enabled: this workflow builds, signs and publishes for real. It is the first
+  # one turned on, being the smallest -- two packages, no matrix, root rpmbuild.
+  # The other three still stop after the dry run.
+  #
+  # The sign step needs the RPM_GPG_KEY repository secret; without it the step
+  # fails rather than silently shipping unsigned RPMs.
+  RPM_BUILD_ENABLED: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # scenefx then mangowm, both meson. Generous for a first real run.
+    timeout-minutes: 60
+    container:
+      image: registry.fedoraproject.org/fedora:44
+    steps:
+      # The Fedora image ships no git binary, so checkout falls back to fetching a
+      # tarball through the REST API and leaves NO .git directory in the workspace.
+      # That is a real improvement over Woodpecker, which clones: the hazard the
+      # `dnf install` below avoids by omitting git cannot arise here at all. The
+      # omission stays anyway -- it is the thing being relied on, not this.
+      - uses: actions/checkout@v7
+
+      - name: prepare build environment
+        run: |
+          set -eux
+          # dnf5-plugins provides `dnf builddep`, rpmdevtools provides `spectool`.
+          # Deliberately no git: mangowm's meson.build changes the version string it
+          # compiles in whenever git is on PATH, and %{_builddir} is not a checkout.
+          dnf -y install rpm-build rpmdevtools dnf5-plugins
+          mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
+
+          # Assert the invariant rather than trusting the base image to keep it. If
+          # a future fedora:44 pulls git in as a dependency, mangowm's compiled-in
+          # version string changes silently -- this turns that into a red build.
+          if command -v git >/dev/null 2>&1; then
+            echo 'ERROR: git is on PATH; mangowm must build without it' >&2
+            exit 1
+          fi
+
+          # THE RULE, the same in all four workflows: root does dnf, everything else
+          # runs as `builder`. rpmbuild as root is the anomaly, not the exception --
+          # mock builds every Fedora package as "mockbuild" whether or not its %check
+          # cares. Root also hides packaging bugs: an %install that writes outside
+          # %{buildroot} succeeds silently as root and fails loudly as builder.
+          #
+          # This is the only chown in the workflow. Because spectool drops privileges
+          # too, root never writes into _build after this line, so there is nothing to
+          # keep re-chowning.
+          id builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder _build
+
+          # Prove `builder` can traverse to the workspace before the build depends on
+          # it. The runner's /__w path is not something this repo controls, and a
+          # traversal failure would otherwise surface as a confusing rpmbuild error.
+          runuser -u builder -- ls -ld "$PWD/_build"
+
+      # Not a stub: rpmspec expands %{?dist} on the running distro, so this asserts
+      # the container is the distro we think it is, that both specs still parse
+      # there, and that the filenames the release job will upload are the expected
+      # ones. Reads as a dry run of the publish while the build is switched off.
+      - name: dry run
+        run: |
+          set -eu
+          for spec in packages/scenefx/scenefx.spec packages/mangowm/mangowm.spec; do
+            echo "--- $spec"
+            echo "  srpm:    $(rpmspec -q --srpm --qf '%{name}-%{version}-%{release}' "$spec")"
+            echo '  would publish:'
+            rpmspec -q --qf '    %{name}-%{version}-%{release}.%{arch}.rpm\n' "$spec" \
+              | grep -vE -- '-debug(info|source)-'
+          done
+
+      # ----------------------------------------------------------------------
+      # Everything below is stage 2. Verbatim from .woodpecker/mangowm.yaml.
+      #
+      # Woodpecker joins a step's commands into ONE shell, so state leaks between
+      # lines by design -- here, the packages each `dnf install` puts in place must
+      # be visible to the rpmbuild after it. GitHub Actions runs each `run:` in a
+      # SEPARATE shell, so the whole sequence is one `run: |` block. Do not split
+      # it into per-line steps.
+      # ----------------------------------------------------------------------
+      - name: build
+        if: env.RPM_BUILD_ENABLED == 'true'
+        run: |
+          set -eux
+          # The alternation below is deliberate: `dnf` needs root, spectool and
+          # rpmbuild do not and must not have it. runuser takes an argv list rather
+          # than a command string, so there is no nested quoting to get wrong -- $PWD
+          # still expands in this (root) shell before exec, so the paths stay absolute
+          # exactly as they were under Woodpecker.
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/scenefx/scenefx.spec
+          dnf -y builddep packages/scenefx/scenefx.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/scenefx/scenefx.spec
+
+          # mangowm BuildRequires scenefx-devel. Install what we just built, minus
+          # the debug packages, which nothing needs and which drag in extra deps.
+          dnf -y install $(ls _build/RPMS/x86_64/*.rpm | grep -v -- -debug)
+
+          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/mangowm/mangowm.spec
+          dnf -y builddep packages/mangowm/mangowm.spec
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/mangowm/mangowm.spec
+
+          # The whole claim of this workflow, in one command. If a future edit
+          # reintroduces a root write into the build tree, this fails here rather
+          # than silently producing a package built with the wrong privileges.
+          if [ -n "$(find _build ! -user builder -print -quit)" ]; then
+            echo 'ERROR: root-owned files in _build; something ran privileged' >&2
+            find _build ! -user builder -ls | head >&2
+            exit 1
+          fi
+
+          cp _build/RPMS/*/*.rpm _build/SRPMS/*.rpm output/
+          sha256sum output/*.rpm
+
+      # Signed here rather than at publish time so the Release asset is byte for
+      # byte what dnf serves -- otherwise anyone grabbing an RPM off the Releases
+      # page gets an unsigned file that gpgcheck=1 refuses.
+      #
+      # No `set -x` in this step: it would echo the key material into the log.
+      - name: sign
+        if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GPG_KEY: ${{ secrets.RPM_GPG_KEY }}
+        run: |
+          set -eu
+          dnf -y install rpm-sign gnupg2
+
+          # rpmsign shells out to gpg, so the key has to be in a keyring rather than
+          # just on disk. The key carries no passphrase, which is what lets gpg run
+          # with rpm's default --pinentry-mode cancel.
+          printf '%s\n' "$GPG_KEY" | gpg --batch --import
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F':' '/^fpr/{print $10; exit}')
+
+          # Not in the Woodpecker original. An empty FPR here means the secret held
+          # a public key, or no key at all -- rpmsign would fail either way, but
+          # with an error that says nothing about the cause. Drop this line if you
+          # want the two copies byte-identical.
+          [ -n "$FPR" ] || { echo 'RPM_GPG_KEY imported no secret key' >&2; exit 1; }
+
+          # Binary RPMs only. debuginfo, debugsource and the SRPM are all
+          # rebuildable from the tagged spec, so they stay out of the repo.
+          mkdir -p publish
+          cp $(ls output/*.rpm | grep -vE -- '-debug(info|source)-|\.src\.rpm$') publish/
+          rpmsign --define "_gpg_name $FPR" --addsign publish/*.rpm
+
+          # Verify against the key that just made the signatures. Do NOT test this
+          # by checking that a signature tag is populated: %{SIGPGP} is the legacy
+          # tag and reads (none) on rpm 4.20 even for a correctly signed package, so
+          # that check rejects every build. Importing the public key and letting rpm
+          # verify is the honest test, and -v records the key ID in the log.
+          gpg --export --armor "$FPR" > /tmp/rpm-pubkey.asc
+          rpm --import /tmp/rpm-pubkey.asc
+          if ! rpm -Kv publish/*.rpm; then echo 'signature verification failed'; exit 1; fi
+
+      # Everything, including debuginfo and the SRPM -- this is the artifact you
+      # download off a PR to check a build by hand.
+      - name: upload build output
+        if: env.RPM_BUILD_ENABLED == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpms-fedora-44
+          path: output/*.rpm
+          if-no-files-found: error
+
+      # Signed, filtered, and consumed by the release job below.
+      - name: upload publishable rpms
+        if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v7
+        with:
+          name: publish-fedora-44
+          path: publish/*.rpm
+          if-no-files-found: error
+
+  # A separate job on the host runner rather than a step in the container, for two
+  # reasons: `gh` is preinstalled there and is not packaged for every distro we
+  # build in, and a matrix workflow (fish) would otherwise have each axis racing to
+  # create the same release. Collecting artifacts here means one release per tag no
+  # matter how many axes fed it.
+  #
+  # `env` is not available in a job-level `if:`, only in a step-level one, so during
+  # stage 1 this job runs on a tag and skips every step. That is expected; it
+  # creates nothing.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: download publishable rpms
+        if: env.RPM_BUILD_ENABLED == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: publish-*
+          merge-multiple: true
+          path: publish
+
+      # --verify-tag refuses to invent a release for a tag that does not exist.
+      # create-or-upload because a re-run of the same tag must not fail outright.
+      - name: create release
+        if: env.RPM_BUILD_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # This job has no actions/checkout, so there is no git remote for gh to
+          # infer the repository from and it exits with "not a git repository".
+          # GH_REPO names the target directly. Adding a checkout would work too, but
+          # cloning the repo just to tell gh its own name is the wrong trade.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes "Built from \`$GITHUB_REF_NAME\`." publish/*.rpm \
+            || gh release upload "$GITHUB_REF_NAME" --clobber publish/*.rpm
