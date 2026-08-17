@@ -1,6 +1,8 @@
-# Translated from .woodpecker/fish.yaml, which is still the live pipeline. Until
-# cutover, BOTH run on a `fish-*` tag: Woodpecker builds and publishes to the K3s
-# repo, this one currently stops before rpmbuild. See RPM_BUILD_ENABLED.
+# Translated from .woodpecker/fish.yaml. Both are switched on, so a `fish-*` tag
+# builds twice: Woodpecker signs and rsyncs to the K3s repo, this one signs and
+# attaches the RPMs to a GitHub Release which publish-pages.yml turns into a dnf
+# repo. Same key, same NVR, two destinations -- see the note on the AlmaLinux matrix
+# entry below, because the two do NOT produce the same .el10 binary.
 #
 # One tag fans out to two distros. Each matrix entry is its own job, so `fish-4.8.1-1`
 # produces fish-4.8.1-1.fc44 AND fish-4.8.1-1.el10. An RPM cannot be shared between
@@ -35,15 +37,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # STAGE 1: prepare the build environment, prove the spec parses, then stop.
-  # Everything from `rpmbuild` onwards is written out below but skipped. Flip this
-  # to 'true' to turn on the real build, signing and release upload.
-  RPM_BUILD_ENABLED: 'false'
+  # Enabled: this workflow builds, signs and publishes for real. Third one turned on,
+  # after mangowm and noctalia. It is the only matrix workflow, so it is also the
+  # first to exercise two distros, `cargo vendor` unprivileged, and the AlmaLinux
+  # image whose CPU baseline is discussed on the matrix entry below.
+  # build-hyprland.yml still stops after the dry run.
+  #
+  # The sign step needs the RPM_GPG_KEY repository secret; without it the step fails
+  # rather than silently shipping unsigned RPMs.
+  RPM_BUILD_ENABLED: 'true'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A Rust build plus `cargo vendor` plus 203 tests, twice over. Generous for a
+    # first real run; lower it once you have seen the actual wall clock.
+    timeout-minutes: 90
     strategy:
       # Each axis stands alone -- a Fedora failure should not hide whether EL10
       # builds. The release job below needs both to succeed before it runs.

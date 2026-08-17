@@ -5,7 +5,7 @@
 
 Name:           fish
 Version:        4.8.1
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Friendly interactive shell
 
 # This is upstream's own declaration for the fish source tree. The vendored Rust
@@ -137,5 +137,8 @@ fi
 %{_pkgdocdir}
 
 %changelog
+* Mon Aug 17 2026 Saeverix - 4.8.1-3
+- Re-release on GitHub
+
 * Sun Aug 02 2026 Saeverix - 4.8.1-1
 - Initial package
