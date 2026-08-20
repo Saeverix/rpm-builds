@@ -3,10 +3,10 @@
 # sorts BELOW everything, so the eventual 5.0.0 final upgrades cleanly with no
 # epoch. %%{upstream_version} keeps the hyphenated form for the tag URL and the
 # unpack directory. Bumping a beta means editing both lines.
-%global upstream_version 5.0.0-beta.8
+%global upstream_version 5.0.0-beta.9
 
 Name:           noctalia
-Version:        5.0.0~beta.8
+Version:        5.0.0~beta.9
 Release:        1%{?dist}
 # Verbatim from upstream's PACKAGING.md, which asks packagers not to substitute a
 # shorter blurb ("lightweight Wayland bar", "status bar"). Noctalia is a full
@@ -189,5 +189,8 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/dev.noctalia.Noctalia
 # handles that with file triggers.
 
 %changelog
+* Thu Aug 21 2026 Saeverix - 5.0.0~beta.9-1
+- Bumped to 5.0.0-beta.9
+
 * Tue Aug 04 2026 Saeverix - 5.0.0~beta.7-1
 - Initial package
