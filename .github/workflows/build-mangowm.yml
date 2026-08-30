@@ -1,10 +1,5 @@
 # Builds scenefx, then mangowm, which links against it.
 #
-# Translated from .woodpecker/mangowm.yaml. This is the first workflow switched on
-# for real, so until cutover BOTH build and both publish on a `mangowm-*` or
-# `scenefx-*` tag: Woodpecker signs and rsyncs to the K3s repo, this one signs and
-# attaches the RPMs to a GitHub Release. Same key, same NVR, two destinations.
-#
 # scenefx shares this workflow instead of getting its own because mangowm is the
 # only consumer: inside one workflow the handoff is just a `dnf install` of the
 # devel RPM we built a moment ago. Give it a workflow of its own the day a second
@@ -14,21 +9,13 @@ name: build mangowm
 on:
   push:
     tags:
-      # Tags are matched on their name rather than on changed paths, exactly as in
-      # Woodpecker. Both prefixes are accepted because this workflow owns both
-      # packages -- tagging either builds and publishes the pair.
+      # Tags are matched on their name rather than on changed paths. Both prefixes
+      # are accepted because this workflow owns both packages -- tagging either
+      # builds and publishes the pair.
       - 'mangowm-*'
       - 'scenefx-*'
-      # Stage-1 only. Woodpecker matches refs/tags/mangowm-* and refs/tags/scenefx-*
-      # and its publish step is NOT disabled, so a test tag using the real prefixes
-      # would sign a build and rsync it into the live K3s repo. `citest-` matches
-      # nothing in Woodpecker's ref.include, so it exercises this workflow alone.
-      # Remove once .woodpecker/ is gone.
-      - 'citest-mangowm-*'
-  # Unlike the tag filter above, a path filter is well defined for a pull request --
-  # it diffs against the base branch. This is the trigger Woodpecker could not
-  # offer: it has no artifact store, so RPMs would not survive a non-publishing run
-  # and every spec had to be verified with a local podman build before tagging.
+  # A path filter is well defined for a pull request -- it diffs against the base
+  # branch, which is what lets a spec get verified here before it is tagged.
   pull_request:
     paths:
       - 'packages/mangowm/**'
@@ -46,9 +33,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Enabled: this workflow builds, signs and publishes for real. It is the first
-  # one turned on, being the smallest -- two packages, no matrix, root rpmbuild.
-  # The other three still stop after the dry run.
+  # Kill switch: set to anything but 'true' to stop this workflow after the dry
+  # run without touching the trigger or job structure below.
   #
   # The sign step needs the RPM_GPG_KEY repository secret; without it the step
   # fails rather than silently shipping unsigned RPMs.
@@ -64,9 +50,7 @@ jobs:
     steps:
       # The Fedora image ships no git binary, so checkout falls back to fetching a
       # tarball through the REST API and leaves NO .git directory in the workspace.
-      # That is a real improvement over Woodpecker, which clones: the hazard the
-      # `dnf install` below avoids by omitting git cannot arise here at all. The
-      # omission stays anyway -- it is the thing being relied on, not this.
+      # That is what makes the `dnf install` below safe to omit git from.
       - uses: actions/checkout@v7
 
       - name: prepare build environment
@@ -118,24 +102,17 @@ jobs:
               | grep -vE -- '-debug(info|source)-'
           done
 
-      # ----------------------------------------------------------------------
-      # Everything below is stage 2. Verbatim from .woodpecker/mangowm.yaml.
-      #
-      # Woodpecker joins a step's commands into ONE shell, so state leaks between
-      # lines by design -- here, the packages each `dnf install` puts in place must
-      # be visible to the rpmbuild after it. GitHub Actions runs each `run:` in a
-      # SEPARATE shell, so the whole sequence is one `run: |` block. Do not split
-      # it into per-line steps.
-      # ----------------------------------------------------------------------
+      # GitHub Actions runs each `run:` in a SEPARATE shell, so the whole build
+      # sequence has to be one `run: |` block -- splitting it into per-line steps
+      # would lose the state (installed packages, _build contents) each line
+      # leaves for the next.
       - name: build
         if: env.RPM_BUILD_ENABLED == 'true'
         run: |
           set -eux
           # The alternation below is deliberate: `dnf` needs root, spectool and
           # rpmbuild do not and must not have it. runuser takes an argv list rather
-          # than a command string, so there is no nested quoting to get wrong -- $PWD
-          # still expands in this (root) shell before exec, so the paths stay absolute
-          # exactly as they were under Woodpecker.
+          # than a command string, so there is no nested quoting to get wrong.
           runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/scenefx/scenefx.spec
           dnf -y builddep packages/scenefx/scenefx.spec
           runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/scenefx/scenefx.spec
@@ -179,10 +156,9 @@ jobs:
           printf '%s\n' "$GPG_KEY" | gpg --batch --import
           FPR=$(gpg --list-secret-keys --with-colons | awk -F':' '/^fpr/{print $10; exit}')
 
-          # Not in the Woodpecker original. An empty FPR here means the secret held
-          # a public key, or no key at all -- rpmsign would fail either way, but
-          # with an error that says nothing about the cause. Drop this line if you
-          # want the two copies byte-identical.
+          # An empty FPR here means the secret held a public key, or no key at all --
+          # rpmsign would fail either way, but with an error that says nothing about
+          # the cause.
           [ -n "$FPR" ] || { echo 'RPM_GPG_KEY imported no secret key' >&2; exit 1; }
 
           # Binary RPMs only. debuginfo, debugsource and the SRPM are all
@@ -225,9 +201,9 @@ jobs:
   # create the same release. Collecting artifacts here means one release per tag no
   # matter how many axes fed it.
   #
-  # `env` is not available in a job-level `if:`, only in a step-level one, so during
-  # stage 1 this job runs on a tag and skips every step. That is expected; it
-  # creates nothing.
+  # `env` is not available in a job-level `if:`, only in a step-level one, so if
+  # RPM_BUILD_ENABLED is ever flipped off this job still runs on a tag but skips
+  # every step. That is expected; it creates nothing.
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')

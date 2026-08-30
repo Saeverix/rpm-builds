@@ -1,6 +1,6 @@
-# Client configuration for the AlmaLinux packages built by this repository and
-# served from GitHub Pages. See saeverix.repo for the Fedora equivalent; the notes on
-# skip_if_unavailable and metadata_expire there apply here too.
+# Client configuration for the AlmaLinux packages built by this repository. See
+# saeverix.repo for the Fedora equivalent; the notes on skip_if_unavailable and
+# metadata_expire there apply here too.
 #
 # A separate file rather than one templated on $releasever, because the distro path
 # segment is not derivable from it: $releasever is "10" on EL10 and "44" on Fedora 44,
@@ -8,14 +8,13 @@
 #
 # Only fish is built for AlmaLinux. Everything else is blocked on missing build
 # dependencies rather than on anything in this repository -- see the Packages table in
-# README.md. Until fish's EL10 axis is enabled, this tree does not exist yet and the
-# repo will 404.
+# README.md.
 [saeverix]
 name=Saeverix packages for AlmaLinux $releasever
-baseurl=https://saeverix.github.io/rpm-builds/almalinux/$releasever/$basearch/
+baseurl=https://rpm.<cloud-domain>/almalinux/$releasever/$basearch/
 enabled=1
 gpgcheck=1
 repo_gpgcheck=1
-gpgkey=https://saeverix.github.io/rpm-builds/RPM-GPG-KEY-saeverix
+gpgkey=https://rpm.<cloud-domain>/RPM-GPG-KEY-saeverix
 skip_if_unavailable=0
 metadata_expire=1h

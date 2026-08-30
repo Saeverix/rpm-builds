@@ -1,9 +1,6 @@
-# Builds Hyprland and the nine packages it needs, in dependency order.
-#
-# Translated from .woodpecker/hyprland.yaml. Both are switched on, so a `hyprland-*`
-# tag builds twice: Woodpecker signs and rsyncs to the K3s repo, this one signs and
-# attaches all ten packages' RPMs to a GitHub Release which publish-pages.yml turns
-# into a dnf repo.
+# Builds Hyprland and the nine packages it needs, in dependency order, and attaches
+# all ten packages' RPMs to a GitHub Release which publish-pages.yml turns into a
+# dnf repo.
 #
 # Fedora 44 has six of those libraries already, but every one of them is too old
 # for this Hyprland (hyprutils 0.7.1 against a required 0.14.0, for instance), and
@@ -21,11 +18,9 @@
 # devel RPMs built a moment ago. Give one its own workflow the day something else
 # needs it.
 #
-# Woodpecker's own reason for keeping them in one workflow -- depends_on orders
-# workflows but shares no files between them -- does not apply to GitHub Actions,
-# which can pass files between jobs as artifacts. The conclusion survives anyway:
-# ten jobs would mean re-running `dnf builddep` and shuttling RPMs through the
-# artifact store at every hop, for a chain that is genuinely sequential.
+# GitHub Actions can pass files between jobs as artifacts, but ten jobs would still
+# mean re-running `dnf builddep` and shuttling RPMs through the artifact store at
+# every hop, for a chain that is genuinely sequential -- one job stays simplest.
 name: build hyprland
 
 on:
@@ -42,11 +37,6 @@ on:
       # rebuilt Hyprland publishes under an NVR clients will actually pick up. See
       # the hyprland section in README.md.
       - 'hyprland-*'
-      # Stage-1 only. Woodpecker matches refs/tags/hyprland-* and its publish step
-      # is NOT disabled, so a test tag using the real prefix would sign a build and
-      # rsync it into the live K3s repo. `citest-` matches nothing in Woodpecker's
-      # ref.include. Remove once .woodpecker/ is gone.
-      - 'citest-hyprland-*'
   # A path filter is well defined for a pull request -- it diffs against the base
   # branch -- unlike for a tag, which is why the tag filter above matches on name.
   # All ten package directories are listed: any of them changing means this stack
@@ -74,10 +64,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Enabled: this workflow builds, signs and publishes for real. Last of the four to
-  # be turned on, and the only one never rehearsed locally -- ten packages is a slow
-  # thing to run twice, and it introduces no mechanism the other three have not
-  # already proven. Its first real run IS the test.
+  # Kill switch: set to anything but 'true' to stop this workflow after the dry
+  # run without touching the trigger or job structure below.
   #
   # What could still surprise: none of these ten has a %check, so the exposure is a
   # %build or %install that quietly relied on root -- writing outside %{buildroot} or
@@ -159,15 +147,10 @@ jobs:
               | grep -vE -- '-debug(info|source)-'
           done
 
-      # ----------------------------------------------------------------------
-      # Everything below is stage 2. Verbatim from .woodpecker/hyprland.yaml.
-      #
-      # Woodpecker joins a step's commands into ONE shell, so state leaks between
-      # lines by design -- here, each stage's `dnf install` must be visible to the
-      # rpmbuild after it. GitHub Actions runs each `run:` in a SEPARATE shell, so
-      # the whole chain is one `run: |` block. Do not split it into per-package
-      # steps; the fourth one would fail to find what the third installed.
-      # ----------------------------------------------------------------------
+      # GitHub Actions runs each `run:` in a SEPARATE shell, so the whole chain has
+      # to be one `run: |` block -- here, each stage's `dnf install` must be
+      # visible to the rpmbuild after it. Do not split it into per-package steps;
+      # the fourth one would fail to find what the third installed.
       - name: build
         if: env.RPM_BUILD_ENABLED == 'true'
         run: |
@@ -188,8 +171,7 @@ jobs:
           # `dnf` needs root, spectool and rpmbuild do not and must not have it.
           # runuser takes an argv list rather than a command string, so there is no
           # nested quoting to get wrong -- $PWD still expands in this (root) shell
-          # before exec, so the paths stay absolute exactly as they were under
-          # Woodpecker.
+          # before exec, so the paths stay absolute.
           runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/hyprwayland-scanner/hyprwayland-scanner.spec
           dnf -y builddep packages/hyprwayland-scanner/hyprwayland-scanner.spec
           runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/hyprwayland-scanner/hyprwayland-scanner.spec
@@ -306,9 +288,9 @@ jobs:
   # build-fish.yml for the other reason -- a matrix would otherwise have each axis
   # racing to create the same release.
   #
-  # `env` is not available in a job-level `if:`, only in a step-level one, so during
-  # stage 1 this job runs on a tag and skips every step. That is expected; it
-  # creates nothing.
+  # `env` is not available in a job-level `if:`, only in a step-level one, so if
+  # RPM_BUILD_ENABLED is ever flipped off this job still runs on a tag but skips
+  # every step. That is expected; it creates nothing.
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')

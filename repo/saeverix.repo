@@ -1,30 +1,23 @@
-# Client configuration for the Fedora packages built by this repository and served
-# from GitHub Pages. Adapted from the homelab copy at apps/rpm-repo/saeverix.repo.
+# Client configuration for the Fedora packages built by this repository, served
+# from GitHub Pages under the rpm.<cloud-domain> custom domain.
 #
 # The bare $releasever and $basearch are dnf's own variables and are expanded per
-# client -- do not substitute them here. Unlike the homelab copy there is no Flux
-# envsubst in front of this file, so the host is written out literally.
-#
-# The URL is deliberately the github.io one for now. Switching it to
-# rpm.<dev-domain> is the cutover step, and is a one-line change here plus a CNAME.
+# client -- do not substitute them here.
 [saeverix]
 name=Saeverix packages for Fedora $releasever
-baseurl=https://saeverix.github.io/rpm-builds/fedora/$releasever/$basearch/
+baseurl=https://rpm.<cloud-domain>/fedora/$releasever/$basearch/
 enabled=1
 gpgcheck=1
 repo_gpgcheck=1
-gpgkey=https://saeverix.github.io/rpm-builds/RPM-GPG-KEY-saeverix
+gpgkey=https://rpm.<cloud-domain>/RPM-GPG-KEY-saeverix
 
-# NOTE: this is deliberately NOT skip_if_unavailable=1, which is what the homelab
-# copy uses. That setting exists there because the K3s repo is LAN-only, so an
-# off-network dnf transaction should proceed without it rather than fail. Pages is
-# publicly reachable, so the reasoning inverts: an unreachable repo here means
-# something is actually wrong. It matters most for Fedora Atomic / bootc image
-# builds -- skipping silently would produce an image that is simply missing these
-# packages, and a build that looks green.
+# Deliberately NOT skip_if_unavailable=1: this repo is publicly reachable, so an
+# unreachable repo means something is actually wrong rather than "off the LAN".
+# It matters most for Fedora Atomic / bootc image builds -- skipping silently
+# would produce an image that is simply missing these packages, and a build that
+# looks green.
 skip_if_unavailable=0
 
 # Only tags publish, so metadata changes rarely. One hour picks new packages up
-# promptly without asking the CDN for repomd.xml on every transaction. The homelab
-# copy uses 300; there is no reason to be that aggressive against a CDN.
+# promptly without asking the CDN for repomd.xml on every transaction.
 metadata_expire=1h

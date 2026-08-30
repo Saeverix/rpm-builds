@@ -1,28 +1,20 @@
-# Translated from .woodpecker/fish.yaml. Both are switched on, so a `fish-*` tag
-# builds twice: Woodpecker signs and rsyncs to the K3s repo, this one signs and
-# attaches the RPMs to a GitHub Release which publish-pages.yml turns into a dnf
-# repo. Same key, same NVR, two destinations -- see the note on the AlmaLinux matrix
-# entry below, because the two do NOT produce the same .el10 binary.
+# Builds fish and attaches the RPMs to a GitHub Release which publish-pages.yml
+# turns into a dnf repo.
 #
 # One tag fans out to two distros. Each matrix entry is its own job, so `fish-4.8.1-1`
 # produces fish-4.8.1-1.fc44 AND fish-4.8.1-1.el10. An RPM cannot be shared between
 # them: EL10 is glibc 2.39 against Fedora 44's 2.43, the sonames differ, and %{?dist}
 # differs. One spec still covers both -- fish needs no conditionals.
 #
-# Unlike under Woodpecker, the axes no longer publish independently: both feed the
-# single release job at the bottom, which runs only once both have succeeded. So a
-# tag can no longer end up half-released with Fedora clients ahead of EL10 ones.
+# The axes do not publish independently: both feed the single release job at the
+# bottom, which runs only once both have succeeded. So a tag cannot end up
+# half-released with Fedora clients ahead of EL10 ones.
 name: build fish
 
 on:
   push:
     tags:
       - 'fish-*'
-      # Stage-1 only. Woodpecker matches refs/tags/fish-* and its publish step is
-      # NOT disabled, so a test tag using the real prefix would sign a build and
-      # rsync it into the live K3s repo. `citest-` matches nothing in Woodpecker's
-      # ref.include. Remove once .woodpecker/ is gone.
-      - 'citest-fish-*'
   pull_request:
     paths:
       - 'packages/fish/**'
@@ -37,11 +29,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Enabled: this workflow builds, signs and publishes for real. Third one turned on,
-  # after mangowm and noctalia. It is the only matrix workflow, so it is also the
-  # first to exercise two distros, `cargo vendor` unprivileged, and the AlmaLinux
-  # image whose CPU baseline is discussed on the matrix entry below.
-  # build-hyprland.yml still stops after the dry run.
+  # Kill switch: set to anything but 'true' to stop this workflow after the dry
+  # run without touching the trigger or job structure below.
   #
   # The sign step needs the RPM_GPG_KEY repository secret; without it the step fails
   # rather than silently shipping unsigned RPMs.
@@ -77,9 +66,7 @@ jobs:
           # it to the plain one. So the same tag yields a different CPU baseline
           # depending on which host pulls it, and that is ACCEPTED here rather than
           # pinned: v2 runs on strictly more hardware than v3, so CI's choice is the
-          # more permissive one. The consequence to know is that the .el10 RPM this
-          # publishes is a v2 build sharing an NVR with the v3 build Woodpecker put in
-          # the K3s repo.
+          # more permissive one.
           #
           # If you ever need the baseline pinned rather than inherited, the tag-based
           # way is docker.io/library/almalinux:10 -- verified byte-equivalent to
@@ -158,15 +145,10 @@ jobs:
           rpmspec -q --qf '    %{name}-%{version}-%{release}.%{arch}.rpm\n' "$spec" \
             | grep -vE -- '-debug(info|source)-'
 
-      # ----------------------------------------------------------------------
-      # Everything below is stage 2. Verbatim from .woodpecker/fish.yaml.
-      #
-      # Woodpecker joins a step's commands into ONE shell, so SOURCES/VER/SRC/VENDOR
-      # carry across lines by design. GitHub Actions runs each `run:` in a SEPARATE
-      # shell, so the whole sequence is one `run: |` block. Splitting it into
-      # per-line steps would drop those variables on the floor and the vendor
-      # tarball would be built in the wrong place, or not at all.
-      # ----------------------------------------------------------------------
+      # GitHub Actions runs each `run:` in a SEPARATE shell, so the whole sequence
+      # has to be one `run: |` block -- splitting it into per-line steps would drop
+      # SOURCES/VER/SRC/VENDOR on the floor and the vendor tarball would be built
+      # in the wrong place, or not at all.
       - name: build
         if: env.RPM_BUILD_ENABLED == 'true'
         run: |
@@ -174,9 +156,8 @@ jobs:
           # Everything that does not need root runs as `builder` in one unprivileged
           # shell, so nothing root-owned ever lands in _build. A heredoc rather than
           # `runuser -u builder -- ...` per line because these commands share state:
-          # SOURCES/VER/SRC/VENDOR carry across them, exactly as they did in the one
-          # shell Woodpecker gave a step. The delimiter is quoted, so this (root)
-          # shell expands nothing -- every variable below is builder's own. runuser
+          # SOURCES/VER/SRC/VENDOR carry across them. The delimiter is quoted, so this
+          # (root) shell expands nothing -- every variable below is builder's own. runuser
           # preserves the working directory, so $PWD is still the workspace.
           #
           # cargo needs a writable HOME for its registry cache; runuser sets
@@ -284,11 +265,11 @@ jobs:
   # reasons: `gh` is preinstalled there and is not packaged for AlmaLinux, and both
   # axes would otherwise race to create the same release. Collecting both axes'
   # artifacts here means one release per tag carrying both the .fc44 and the .el10
-  # RPMs -- which is also what removes Woodpecker's half-published failure mode.
+  # RPMs, so a tag can never end up half-published.
   #
-  # `env` is not available in a job-level `if:`, only in a step-level one, so during
-  # stage 1 this job runs on a tag and skips every step. That is expected; it
-  # creates nothing.
+  # `env` is not available in a job-level `if:`, only in a step-level one, so if
+  # RPM_BUILD_ENABLED is ever flipped off this job still runs on a tag but skips
+  # every step. That is expected; it creates nothing.
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')

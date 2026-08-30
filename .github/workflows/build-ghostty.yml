@@ -1,81 +1,61 @@
-# Builds noctalia and attaches the RPMs to a GitHub Release, which
-# publish-pages.yml then turns into a dnf repo.
-name: build noctalia
+# Builds ghostty. Single package, single distro -- the simplest of the four
+# workflows structurally, though %build/%install are the most involved spec in
+# this repo. See packages/ghostty/ghostty.spec and the README's ghostty section
+# for why: Fedora 44's default zig resolves to 0.16.0 but Ghostty v1.3.1 pins
+# minimum_zig_version 0.15.2, so a pinned upstream Zig release tarball is
+# vendored as a build-time-only tool, and build.zig.zon's dependencies are
+# pre-fetched into an offline cache before rpmbuild runs at all.
+name: build ghostty
 
 on:
   push:
     tags:
-      # Note the hyphen: the spec's Version is 5.0.0~beta.8, but git rejects `~` in
-      # a ref name (it is revision syntax), so tags spell it with a hyphen instead.
-      - 'noctalia-*'
+      - 'ghostty-*'
   pull_request:
     paths:
-      - 'packages/noctalia/**'
-      - '.github/workflows/build-noctalia.yml'
+      - 'packages/ghostty/**'
+      - '.github/workflows/build-ghostty.yml'
   workflow_dispatch:
 
+# Least privilege by default. The release job below raises this for itself only.
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a tag build -- it publishes. Superseded PR builds are fair game.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  # Kill switch: set to anything but 'true' to stop this workflow after the dry
-  # run without touching the trigger or job structure below.
-  #
-  # The sign step needs the RPM_GPG_KEY repository secret; without it the step fails
-  # rather than silently shipping unsigned RPMs.
-  RPM_BUILD_ENABLED: 'true'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Generous for a first real run: a C++23/meson build plus a test suite that drives
-    # real git repositories. Lower it once you have seen the actual wall clock.
-    timeout-minutes: 90
+    # Generous: this compiles GTK4/libadwaita plus Ghostty's own Zig dependency
+    # tree (libxev, vaxis, highway, glslang and friends) with no incremental
+    # cache between runs.
+    timeout-minutes: 60
     container:
       image: registry.fedoraproject.org/fedora:44
     steps:
-      # The Fedora image ships no git binary, so checkout falls back to fetching a
-      # tarball through the REST API and leaves NO .git directory in the workspace.
-      # noctalia.spec's GIT_CEILING_DIRECTORIES pin therefore guards against a
-      # condition that can no longer arise here -- keep it anyway, it is what makes
-      # a local build in a real checkout safe too.
       - uses: actions/checkout@v7
 
       - name: prepare build environment
         run: |
           set -eux
-          # git-core is required here, unlike in build-mangowm.yml where its absence
-          # is deliberate: the plugin_git_export test in %check init/add/commit/
-          # clones real repositories, and fails outright without git on PATH. Do not
-          # "harmonise" the two workflows on this point.
+          # dnf5-plugins provides `dnf builddep`, rpmdevtools provides `spectool`.
+          # git-core IS required here -- build.zig.zon.txt lists one dependency as
+          # git+https://github.com/jacobsandlund/uucode#<commit>, and the zig
+          # dependency fetch below shells out to `zig fetch` on it, which needs
+          # git on PATH. This is a build-time-only need: the fetch happens once in
+          # this job and gets baked into Source3, so rpmbuild itself never touches
+          # git -- `zig build --system` disables all fetching, including that one.
           dnf -y install rpm-build rpmdevtools dnf5-plugins git-core
           mkdir -p _build/SOURCES _build/BUILD _build/BUILDROOT _build/RPMS _build/SRPMS output
 
-          # THE RULE, the same in all four workflows: root does dnf, everything else
-          # runs as `builder`. rpmbuild as root is the anomaly, not the exception --
-          # mock builds every Fedora package as "mockbuild" whether or not its %check
-          # cares.
-          #
-          # noctalia is one of the two packages where %check actively DEPENDS on this:
-          # calendar_cache_permissions, clipboard_storage_permissions,
-          # plugin_source_locks and secret_store all assert on file permissions that
-          # root bypasses, so they fail when the build runs privileged. If you are
-          # ever tempted to simplify the drop away, those four tests are why.
-          #
-          # This is the only chown in the workflow. Because spectool drops privileges
-          # too, root never writes into _build after this line, so there is nothing to
-          # keep re-chowning.
+          # Prove `builder` can traverse to the workspace before the build depends on
+          # it -- created here, but not chowned to yet. Unlike mangowm and noctalia,
+          # the root-owned Zig fetch below has to land in _build/SOURCES before the
+          # chown, so the single chown -R happens later, right before rpmbuild.
           id builder >/dev/null 2>&1 || useradd -m builder
-          chown -R builder:builder _build
-
-          # Prove `builder` can actually reach the workspace before the build depends
-          # on it. The runner's /__w path is not something this repo controls, and a
-          # traversal failure here would otherwise surface as a confusing rpmbuild
-          # error much later.
           runuser -u builder -- ls -ld "$PWD/_build"
 
       # Not a stub: rpmspec expands %{?dist} on the running distro, so this asserts
@@ -85,29 +65,57 @@ jobs:
       - name: dry run
         run: |
           set -eu
-          spec=packages/noctalia/noctalia.spec
+          spec=packages/ghostty/ghostty.spec
           echo "  srpm:    $(rpmspec -q --srpm --qf '%{name}-%{version}-%{release}' "$spec")"
           echo '  would publish:'
           rpmspec -q --qf '    %{name}-%{version}-%{release}.%{arch}.rpm\n' "$spec" \
             | grep -vE -- '-debug(info|source)-'
 
-      # GitHub Actions runs each `run:` in a SEPARATE shell, so the whole build
-      # sequence has to be one `run: |` block. Every path stays absolute and there
-      # is no cd.
       - name: build
-        if: env.RPM_BUILD_ENABLED == 'true'
         run: |
           set -eux
-          # The alternation below is deliberate: `dnf` needs root, spectool and
-          # rpmbuild do not and must not have it. runuser takes an argv list rather
-          # than a command string, so there is no nested quoting to get wrong.
-          runuser -u builder -- spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/noctalia/noctalia.spec
-          dnf -y builddep packages/noctalia/noctalia.spec
-          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/noctalia/noctalia.spec
+          # Fetches Source0 (release tarball), Source1 (its .minisig) and Source2
+          # (the vendored Zig toolchain), all of which have URLs. Source3 (the Zig
+          # dependency cache) has a bare filename, so spectool skips it -- it is
+          # built by the rest of this step instead, the same way fish's vendored
+          # cargo crates are built in build-fish.yml.
+          spectool --define "_topdir $PWD/_build" --get-files --sourcedir packages/ghostty/ghostty.spec
 
-          # The whole claim of this workflow, in one command. If a future edit
-          # reintroduces a root write into the build tree, this fails here rather
-          # than silently producing a package whose %check never really ran.
+          # Unpack the vendored Zig 0.15.2 and the Ghostty release tarball into
+          # scratch directories, then run upstream's own fetch-zig-cache.sh to
+          # populate an offline dependency cache. This is the only step in this
+          # whole workflow that touches the network on Ghostty's behalf.
+          SOURCES=$PWD/_build/SOURCES
+          VER=$(rpmspec -q --qf '%{version}\n' --srpm packages/ghostty/ghostty.spec)
+          SRC=$SOURCES/ghostty-$VER
+          ZIGDIR=$SOURCES/zig-x86_64-linux-0.15.2
+          CACHE=$SOURCES/zig-cache-tmp
+          rm -rf "$SRC" "$ZIGDIR" "$CACHE"
+          tar -C "$SOURCES" -xf "$SOURCES/ghostty-$VER.tar.gz"
+          tar -C "$SOURCES" -xf "$SOURCES/zig-x86_64-linux-0.15.2.tar.xz"
+          export PATH="$ZIGDIR:$PATH"
+          ZIG_GLOBAL_CACHE_DIR="$CACHE" "$SRC/nix/build-support/fetch-zig-cache.sh"
+
+          # Source3 is just the "p" subdirectory zig fetch populates -- that is
+          # also the path %install's `--system` flag points at once this is
+          # unpacked there again.
+          tar -C "$CACHE" -cJf "$SOURCES/ghostty-$VER-zig-cache.tar.xz" p
+          rm -rf "$SRC" "$ZIGDIR" "$CACHE"
+
+          dnf -y builddep packages/ghostty/ghostty.spec
+
+          # THE RULE, the same in every workflow here: root does dnf (and, for this
+          # package only, the Zig cache fetch above), everything else runs as
+          # `builder`. The chown happens here rather than in "prepare build
+          # environment" because the fetch above has to write into _build/SOURCES
+          # as root first -- this re-owns the whole tree to builder right before
+          # the one thing that actually must not run as root.
+          chown -R builder:builder _build
+          runuser -u builder -- rpmbuild --define "_topdir $PWD/_build" -ba packages/ghostty/ghostty.spec
+
+          # The whole claim of the chown above, in one command. If a future edit
+          # writes into _build as root after this point, this fails here rather
+          # than silently producing a package built with the wrong privileges.
           if [ -n "$(find _build ! -user builder -print -quit)" ]; then
             echo 'ERROR: root-owned files in _build; something ran privileged' >&2
             find _build ! -user builder -ls | head >&2
@@ -123,7 +131,7 @@ jobs:
       #
       # No `set -x` in this step: it would echo the key material into the log.
       - name: sign
-        if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GPG_KEY: ${{ secrets.RPM_GPG_KEY }}
         run: |
@@ -135,6 +143,7 @@ jobs:
           # with rpm's default --pinentry-mode cancel.
           printf '%s\n' "$GPG_KEY" | gpg --batch --import
           FPR=$(gpg --list-secret-keys --with-colons | awk -F':' '/^fpr/{print $10; exit}')
+          [ -n "$FPR" ] || { echo 'RPM_GPG_KEY imported no secret key' >&2; exit 1; }
 
           # Binary RPMs only. debuginfo, debugsource and the SRPM are all
           # rebuildable from the tagged spec, so they stay out of the repo.
@@ -152,7 +161,6 @@ jobs:
           if ! rpm -Kv publish/*.rpm; then echo 'signature verification failed'; exit 1; fi
 
       - name: upload build output
-        if: env.RPM_BUILD_ENABLED == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: rpms-fedora-44
@@ -160,21 +168,15 @@ jobs:
           if-no-files-found: error
 
       - name: upload publishable rpms
-        if: env.RPM_BUILD_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v7
         with:
           name: publish-fedora-44
           path: publish/*.rpm
           if-no-files-found: error
 
-  # A separate job on the host runner rather than a step in the container: `gh` is
-  # preinstalled there and is not packaged for every distro we build in. See
-  # build-fish.yml for the other reason -- a matrix would otherwise have each axis
-  # racing to create the same release.
-  #
-  # `env` is not available in a job-level `if:`, only in a step-level one, so if
-  # RPM_BUILD_ENABLED is ever flipped off this job still runs on a tag but skips
-  # every step. That is expected; it creates nothing.
+  # Separate job on the host runner: `gh` is preinstalled there and is not
+  # packaged for every distro built in above.
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
@@ -183,21 +185,20 @@ jobs:
       contents: write
     steps:
       - name: download publishable rpms
-        if: env.RPM_BUILD_ENABLED == 'true'
         uses: actions/download-artifact@v8
         with:
           pattern: publish-*
           merge-multiple: true
           path: publish
 
+      # --verify-tag refuses to invent a release for a tag that does not exist.
+      # create-or-upload because a re-run of the same tag must not fail outright.
       - name: create release
-        if: env.RPM_BUILD_ENABLED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           # This job has no actions/checkout, so there is no git remote for gh to
           # infer the repository from and it exits with "not a git repository".
-          # GH_REPO names the target directly. Adding a checkout would work too, but
-          # cloning the repo just to tell gh its own name is the wrong trade.
+          # GH_REPO names the target directly.
           GH_REPO: ${{ github.repository }}
         run: |
           set -eu

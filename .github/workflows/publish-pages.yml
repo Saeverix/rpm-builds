@@ -6,15 +6,12 @@
 #
 #   - Adding a package is publishing a release. Removing one is deleting a release and
 #     re-running this workflow; there is no separate delete path.
-#   - The metadata can never be half-updated, which is what the K3s pipeline could do
-#     when one matrix axis published and the other failed.
-#   - repomd.xml is signed in the same job that generates it, so the whole
-#     pull-it-back-over-ssh-and-sign dance in .woodpecker/*.yaml disappears -- and with
-#     it the `ssh -n` stdin footgun that once silently skipped signing and left clients
-#     without repomd.xml.asc.
-#
-# A tag prefixed `citest-` is therefore harmless here: the tag name never reaches the
-# repo, only the NVR inside the RPM does. Nothing filters on tag names.
+#   - The metadata can never be half-updated: a matrix axis publishing while another
+#     fails cannot leave the repo in a half-updated state, because nothing here reads
+#     from the previous run's output -- only from the Releases.
+#   - repomd.xml is signed in the same job that generates it, so createrepo_c and
+#     the signing key are always co-located; there is no remote step to pull a
+#     generated file back from before it can be signed.
 name: publish pages
 
 on:
@@ -150,9 +147,8 @@ jobs:
           # enabled and this tree is actually non-empty.
           createrepo_c --general-compress-type=gz site/almalinux/10/x86_64
 
-      # repomd.xml is signed in the same job that wrote it -- the whole reason the K3s
-      # pipeline needed to pull it back over ssh was that createrepo_c ran somewhere the
-      # key was not.
+      # repomd.xml is signed in the same job that wrote it, so there is no remote
+      # step to pull a generated file back from before it can be signed.
       #
       # No `set -x` in this step: it would echo the key material into the log.
       - name: sign the metadata
