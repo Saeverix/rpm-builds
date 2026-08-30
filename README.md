@@ -278,7 +278,7 @@ removing one is deleting a release and re-running the workflow. That is also why
 `repomd.xml` can be signed in the same job that writes it — there is no separate
 server to pull a generated file back from before it can be signed.
 
-The repo is served from GitHub Pages under the custom domain `rpm.<cloud-domain>`
+The repo is served from GitHub Pages under the custom domain `rpm.vries.cloud`
 (a CNAME plus GitHub's own Pages custom-domain setting). Client config for it is
 in `repo/`.
 
@@ -286,7 +286,7 @@ in `repo/`.
 
 - Repository must be **public** — Pages requires it on the Free plan.
 - Settings → Pages → *Build and deployment* → Source: **GitHub Actions**.
-- Settings → Pages → *Custom domain*: `rpm.<cloud-domain>`, plus the matching CNAME
+- Settings → Pages → *Custom domain*: `rpm.vries.cloud`, plus the matching CNAME
   record with the DNS provider.
 - `RPM_GPG_KEY` repository secret: the armoured private key. Export it with
   `gpg --export-secret-keys --armor <fingerprint>`.
@@ -471,8 +471,8 @@ against the one it just signed with, so the two cannot silently drift apart.
 Installing on a Fedora box:
 
 ```sh
-sudo curl -o /etc/yum.repos.d/saeverix.repo https://rpm.<cloud-domain>/saeverix.repo
-sudo rpm --import https://rpm.<cloud-domain>/RPM-GPG-KEY-saeverix
+sudo curl -o /etc/yum.repos.d/saeverix.repo https://rpm.vries.cloud/saeverix.repo
+sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-saeverix
 sudo dnf install mangowm fish
 ```
 

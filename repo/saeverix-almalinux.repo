@@ -11,10 +11,10 @@
 # README.md.
 [saeverix]
 name=Saeverix packages for AlmaLinux $releasever
-baseurl=https://rpm.<cloud-domain>/almalinux/$releasever/$basearch/
+baseurl=https://rpm.vries.cloud/almalinux/$releasever/$basearch/
 enabled=1
 gpgcheck=1
 repo_gpgcheck=1
-gpgkey=https://rpm.<cloud-domain>/RPM-GPG-KEY-saeverix
+gpgkey=https://rpm.vries.cloud/RPM-GPG-KEY-saeverix
 skip_if_unavailable=0
 metadata_expire=1h

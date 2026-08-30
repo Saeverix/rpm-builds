@@ -1,6 +1,6 @@
 Name:           ghostty
 Version:        1.3.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Fast, feature-rich, cross-platform terminal emulator
 
 License:        MIT
@@ -129,6 +129,14 @@ DESTDIR=%{buildroot} zig build \
 # case that has one), so it's simply not installed here instead.
 rm -rf %{buildroot}%{_datadir}/nautilus-python
 
+# ncurses-term already ships this exact path -- upstream ncurses carries its
+# own "ghostty" terminfo entry now -- so packaging ours too is a file conflict,
+# not a duplicate-but-harmless overlap: `rpm -qf /usr/share/terminfo/g/ghostty`
+# resolves to ncurses-term, and installing both fails the transaction outright.
+# xterm-ghostty has no such collision -- ncurses-term does not carry it -- so
+# only this one file is dropped.
+rm -f %{buildroot}%{_datadir}/terminfo/g/ghostty
+
 %files
 %license LICENSE
 %doc README.md
@@ -159,11 +167,14 @@ rm -rf %{buildroot}%{_datadir}/nautilus-python
 %{_datadir}/nvim/site/ftplugin/ghostty.vim
 %{_datadir}/nvim/site/syntax/ghostty.vim
 %{_datadir}/bat/syntaxes/ghostty.sublime-syntax
-%{_datadir}/terminfo/g/ghostty
 %{_datadir}/terminfo/x/xterm-ghostty
 # 45 locale directories, listed as one glob rather than by hand.
 %{_datadir}/locale/*/LC_MESSAGES/com.mitchellh.ghostty.mo
 
 %changelog
+* Sun Aug 30 2026 Saeverix - 1.3.1-2
+- Drop the terminfo/g/ghostty file: it conflicts with ncurses-term, which
+  already carries that entry upstream
+
 * Sun Aug 30 2026 Saeverix - 1.3.1-1
 - Initial package

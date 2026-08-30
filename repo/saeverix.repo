@@ -1,15 +1,15 @@
 # Client configuration for the Fedora packages built by this repository, served
-# from GitHub Pages under the rpm.<cloud-domain> custom domain.
+# from GitHub Pages under the rpm.vries.cloud custom domain.
 #
 # The bare $releasever and $basearch are dnf's own variables and are expanded per
 # client -- do not substitute them here.
 [saeverix]
 name=Saeverix packages for Fedora $releasever
-baseurl=https://rpm.<cloud-domain>/fedora/$releasever/$basearch/
+baseurl=https://rpm.vries.cloud/fedora/$releasever/$basearch/
 enabled=1
 gpgcheck=1
 repo_gpgcheck=1
-gpgkey=https://rpm.<cloud-domain>/RPM-GPG-KEY-saeverix
+gpgkey=https://rpm.vries.cloud/RPM-GPG-KEY-saeverix
 
 # Deliberately NOT skip_if_unavailable=1: this repo is publicly reachable, so an
 # unreachable repo means something is actually wrong rather than "off the LAN".

@@ -41,20 +41,20 @@ signed by GitHub Actions from
 
 <h2>Install on Fedora</h2>
 <pre><code>sudo curl -o /etc/yum.repos.d/saeverix.repo \
-  https://rpm.<cloud-domain>/saeverix.repo
-sudo rpm --import https://rpm.<cloud-domain>/RPM-GPG-KEY-saeverix
+  https://rpm.vries.cloud/saeverix.repo
+sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-saeverix
 sudo dnf install mangowm</code></pre>
 
 <h2>Install on AlmaLinux 10</h2>
 <pre><code>sudo curl -o /etc/yum.repos.d/saeverix.repo \
-  https://rpm.<cloud-domain>/saeverix-almalinux.repo
-sudo rpm --import https://rpm.<cloud-domain>/RPM-GPG-KEY-saeverix
+  https://rpm.vries.cloud/saeverix-almalinux.repo
+sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-saeverix
 sudo dnf install fish</code></pre>
 
 <h2>Use in a Fedora Atomic / bootc image</h2>
 <pre><code>RUN curl -o /etc/yum.repos.d/saeverix.repo \
-      https://rpm.<cloud-domain>/saeverix.repo &amp;&amp; \
-    rpm --import https://rpm.<cloud-domain>/RPM-GPG-KEY-saeverix &amp;&amp; \
+      https://rpm.vries.cloud/saeverix.repo &amp;&amp; \
+    rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-saeverix &amp;&amp; \
     dnf -y install mangowm &amp;&amp; \
     dnf clean all</code></pre>
 <p>The repo files set <code>skip_if_unavailable=0</code> on purpose, so an unreachable
