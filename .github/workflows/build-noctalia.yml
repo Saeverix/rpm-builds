@@ -7,7 +7,11 @@ on:
     tags:
       # Note the hyphen: the spec's Version is 5.0.0~beta.8, but git rejects `~` in
       # a ref name (it is revision syntax), so tags spell it with a hyphen instead.
-      - 'noctalia-*'
+      #
+      # Narrowed from 'noctalia-*' to 'noctalia-[0-9]*': the plain prefix also
+      # matched 'noctalia-greeter-*' once that package's workflow existed,
+      # spuriously re-triggering this build on an unrelated tag.
+      - 'noctalia-[0-9]*'
   pull_request:
     paths:
       - 'packages/noctalia/**'
