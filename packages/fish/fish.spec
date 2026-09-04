@@ -4,8 +4,8 @@
 %define _wrong_version_format_terminate_build 0
 
 Name:           fish
-Version:        4.8.1
-Release:        3%{?dist}
+Version:        4.9.1
+Release:        1%{?dist}
 Summary:        Friendly interactive shell
 
 # This is upstream's own declaration for the fish source tree. The vendored Rust
@@ -137,6 +137,9 @@ fi
 %{_pkgdocdir}
 
 %changelog
+* Fri Sep 04 2026 Saeverix - 4.9.1-1
+- Bumped to 4.9.1
+
 * Mon Aug 17 2026 Saeverix - 4.8.1-3
 - Re-release on GitHub
 
