@@ -1,12 +1,5 @@
-# Upstream tags v5 betas as v5.0.0-beta.7, which RPM cannot use verbatim: a
-# hyphen is the Version-Release separator. Version therefore uses a tilde, which
-# sorts BELOW everything, so the eventual 5.0.0 final upgrades cleanly with no
-# epoch. %%{upstream_version} keeps the hyphenated form for the tag URL and the
-# unpack directory. Bumping a beta means editing both lines.
-%global upstream_version 5.0.0-beta.10
-
 Name:           noctalia
-Version:        5.0.0~beta.10
+Version:        5.0.1
 Release:        1%{?dist}
 # Verbatim from upstream's PACKAGING.md, which asks packagers not to substitute a
 # shorter blurb ("lightweight Wayland bar", "status bar"). Noctalia is a full
@@ -18,7 +11,7 @@ Summary:        A sleek, customizable desktop shell crafted for Wayland
 # (Apache-2.0), Luau (MIT) and fzy (MIT).
 License:        MIT AND Apache-2.0
 URL:            https://github.com/noctalia-dev/noctalia
-Source0:        %{url}/archive/refs/tags/v%{upstream_version}/%{name}-%{upstream_version}.tar.gz
+Source0:        %{url}/archive/refs/tags/v%{version}/%{name}-%{version}.tar.gz
 
 # C++23 is mandatory (GCC 13+); Fedora 44 ships GCC 16.
 BuildRequires:  gcc-c++
@@ -136,7 +129,7 @@ which run "noctalia --daemon", and control a running instance with
 %global _smp_tasksize_proc 2048
 
 %prep
-%autosetup -n %{name}-%{upstream_version}
+%autosetup -n %{name}-%{version}
 
 %build
 # git IS on PATH for this build, because the plugin_git_export test in %%check
@@ -189,6 +182,9 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/dev.noctalia.Noctalia
 # handles that with file triggers.
 
 %changelog
+* Fri Sep 04 2026 Saeverix - 5.0.1-1
+- Bumped to 5.0.1
+
 * Thu Aug 27 2026 Saeverix - 5.0.0~beta.10-1
 - Bumped to 5.0.0-beta.10
 
