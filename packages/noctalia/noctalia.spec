@@ -1,5 +1,5 @@
 Name:           noctalia
-Version:        5.0.1
+Version:        5.1.0
 Release:        1%{?dist}
 # Verbatim from upstream's PACKAGING.md, which asks packagers not to substitute a
 # shorter blurb ("lightweight Wayland bar", "status bar"). Noctalia is a full
@@ -182,6 +182,9 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/dev.noctalia.Noctalia
 # handles that with file triggers.
 
 %changelog
+* Thu Sep 10 2026 Saeverix - 5.1.0-1
+- Bumped to 5.1.0
+
 * Fri Sep 04 2026 Saeverix - 5.0.1-1
 - Bumped to 5.0.1
 
