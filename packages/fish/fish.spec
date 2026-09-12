@@ -4,7 +4,7 @@
 %define _wrong_version_format_terminate_build 0
 
 Name:           fish
-Version:        4.9.1
+Version:        4.9.3
 Release:        1%{?dist}
 Summary:        Friendly interactive shell
 
@@ -137,6 +137,9 @@ fi
 %{_pkgdocdir}
 
 %changelog
+* Sat Sep 12 2026 Saeverix - 4.9.3-1
+- Bumped to 4.9.3
+
 * Fri Sep 04 2026 Saeverix - 4.9.1-1
 - Bumped to 4.9.1
 
