@@ -1,5 +1,5 @@
 Name:           mangowm
-Version:        0.17.0
+Version:        0.17.1
 Release:        1%{?dist}
 Summary:        Wayland compositor based on wlroots with dwm-like tiling and effects
 
@@ -72,6 +72,9 @@ blur and shadows on top. Configuration is a plain text file at
 %config(noreplace) %{_sysconfdir}/mango/config.conf
 
 %changelog
+* Tue Sep 15 2026 Saeverix - 0.17.1-1
+- Bumped to 0.17.1
+
 * Sun Sep 13 2026 Saeverix - 0.17.0-1
 - Bumped to 0.17.0
 
