@@ -1,6 +1,6 @@
 Name:           mangowm
 Version:        0.17.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Wayland compositor based on wlroots with dwm-like tiling and effects
 
 # mango itself is GPL-3.0-or-later; it carries MIT-licensed code inherited from
@@ -67,6 +67,7 @@ blur and shadows on top. Configuration is a plain text file at
 %{_datadir}/wayland-sessions/mango.desktop
 %{_datadir}/xdg-desktop-portal/mango-portals.conf
 %dir %{_sysconfdir}/mango
+/usr/lib/systemd/user/mango-session.target
 # noreplace: this is the live keybinding and layout config. An upgrade that
 # overwrites it would silently throw away the user's whole setup.
 %config(noreplace) %{_sysconfdir}/mango/config.conf
