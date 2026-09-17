@@ -1,6 +1,12 @@
+# Off by default: this rebuilds mango with AddressSanitizer/LeakSanitizer
+# instrumentation, per upstream's steps for chasing the memory-leak report.
+# Build with `rpmbuild --with asan` to enable it; not something to ship in the
+# published repo.
+%bcond asan 0
+
 Name:           mangowm
-Version:        0.17.1
-Release:        2%{?dist}
+Version:        0.17.2
+Release:        1%{?dist}
 Summary:        Wayland compositor based on wlroots with dwm-like tiling and effects
 
 # mango itself is GPL-3.0-or-later; it carries MIT-licensed code inherited from
@@ -29,6 +35,11 @@ BuildRequires:  pkgconfig(libdrm)
 # Required by the xwayland feature, which meson_options.txt enables by default.
 BuildRequires:  pkgconfig(xcb)
 BuildRequires:  pkgconfig(xcb-icccm)
+# gcc does not pull this in on its own; -fsanitize=address needs libasan.so
+# present at link time, which only the libasan package ships.
+%if %{with asan}
+BuildRequires:  libasan
+%endif
 
 # Do NOT add git here. meson.build shells out to `git rev-parse --short HEAD`
 # whenever git is on PATH, and %%{_builddir} is not a git checkout, so the call
@@ -52,7 +63,7 @@ blur and shadows on top. Configuration is a plain text file at
 %autosetup -n mango-%{version}
 
 %build
-%meson
+%meson %{?with_asan:-Dasan=true}
 %meson_build
 
 %install
@@ -73,6 +84,9 @@ blur and shadows on top. Configuration is a plain text file at
 %config(noreplace) %{_sysconfdir}/mango/config.conf
 
 %changelog
+* Tue Sep 15 2026 Saeverix - 0.17.2-1
+- Bumped to 0.17.2
+
 * Tue Sep 15 2026 Saeverix - 0.17.1-1
 - Bumped to 0.17.1
 
