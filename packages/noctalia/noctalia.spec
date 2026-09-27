@@ -1,5 +1,5 @@
 Name:           noctalia
-Version:        5.1.0
+Version:        5.2.0
 Release:        1%{?dist}
 # Verbatim from upstream's PACKAGING.md, which asks packagers not to substitute a
 # shorter blurb ("lightweight Wayland bar", "status bar"). Noctalia is a full
@@ -78,6 +78,7 @@ Requires:       pipewire
 Requires:       wireplumber
 # Plugin git sources and plugin auto-update invoke git on PATH.
 Requires:       git-core
+Requires:       sound-theme-freedesktop
 
 Recommends:     upower
 Recommends:     ddcutil
@@ -182,6 +183,9 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/dev.noctalia.Noctalia
 # handles that with file triggers.
 
 %changelog
+* Sun Sep 27 2026 Saeverix - 5.2.0-1
+- Bumped to 5.2.0
+
 * Thu Sep 10 2026 Saeverix - 5.1.0-1
 - Bumped to 5.1.0
 
