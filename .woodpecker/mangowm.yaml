@@ -1,0 +1,89 @@
+# Builds scenefx, then mangowm, which links against it.
+#
+# scenefx shares this workflow instead of getting its own because mangowm is the
+# only consumer: inside one workflow the handoff is just a `dnf install` of the
+# devel RPM we built a moment ago. Give it a workflow of its own the day a second
+# package needs it.
+#
+# The spec is the trigger: a push to main that touches either package builds the
+# pair. There are no tags and no GitHub Releases; the spec's NVR is the identity.
+# BUILD ONLY for now -- nothing is signed or published, so a bump here does not
+# reach dnf clients yet. Because nothing is published, there is also no "already
+# built" check: every matching push rebuilds. That check belongs with publishing.
+#
+# A scenefx change rebuilds both, but publishes under mangowm's NVR once publishing
+# exists, so bump mangowm's Release along with any scenefx change -- the same rule
+# as the hyprland stack.
+labels:
+  location: vm
+
+when:
+  - event: push
+    branch: main
+    path:
+      include:
+        - 'packages/mangowm/**'
+        - 'packages/scenefx/**'
+        - '.woodpecker/mangowm.yaml'
+  - event: pull_request
+    path:
+      include:
+        - 'packages/mangowm/**'
+        - 'packages/scenefx/**'
+        - '.woodpecker/mangowm.yaml'
+  - event: manual
+
+steps:
+  - name: build
+    image: registry.fedoraproject.org/fedora:44
+    commands:
+      # dnf5-plugins provides `dnf builddep`, rpmdevtools provides `spectool`.
+      # Deliberately no git: mangowm's meson.build changes the version string it
+      # compiles in whenever git is on PATH. Woodpecker clones in its own
+      # container, so nothing here needs it.
+      - dnf -y install rpm-build rpmdevtools dnf5-plugins
+      - mkdir -p $CI_WORKSPACE/_build/SOURCES $CI_WORKSPACE/_build/BUILD $CI_WORKSPACE/_build/BUILDROOT $CI_WORKSPACE/_build/RPMS $CI_WORKSPACE/_build/SRPMS $CI_WORKSPACE/output
+
+      # Assert the invariant rather than trusting the base image to keep it. If a
+      # future fedora:44 pulls git in as a dependency, mangowm's compiled-in
+      # version string changes silently -- this turns that into a red build.
+      - if command -v git >/dev/null 2>&1; then echo 'ERROR - git is on PATH; mangowm must build without it' >&2; exit 1; fi
+
+      # What this run builds, read from the specs on the running distro, so the
+      # log names the NVRs before the build spends time on them.
+      - rpmspec -q --srpm --qf 'srpm   %{name}-%{version}-%{release}\n' $CI_WORKSPACE/packages/scenefx/scenefx.spec
+      - rpmspec -q --qf 'rpm    %{name}-%{version}-%{release}.%{arch}.rpm\n' $CI_WORKSPACE/packages/scenefx/scenefx.spec
+      - rpmspec -q --srpm --qf 'srpm   %{name}-%{version}-%{release}\n' $CI_WORKSPACE/packages/mangowm/mangowm.spec
+      - rpmspec -q --qf 'rpm    %{name}-%{version}-%{release}.%{arch}.rpm\n' $CI_WORKSPACE/packages/mangowm/mangowm.spec
+
+      # Root does dnf, everything else runs as `builder`. Root hides packaging
+      # bugs -- an %install that writes outside %{buildroot} succeeds silently as
+      # root and fails loudly as builder -- and Fedora's mock never builds as root
+      # either. This is the only chown: spectool drops privileges too, so root
+      # never writes into _build after this line.
+      - id builder >/dev/null 2>&1 || useradd -m builder
+      - chown -R builder:builder $CI_WORKSPACE/_build
+      # Prove `builder` can traverse to the workspace before the build depends on
+      # it; a traversal failure would otherwise surface as a confusing rpmbuild
+      # error.
+      - runuser -u builder -- ls -ld $CI_WORKSPACE/_build
+
+      - runuser -u builder -- spectool --define "_topdir $CI_WORKSPACE/_build" --get-files --sourcedir $CI_WORKSPACE/packages/scenefx/scenefx.spec
+      - dnf -y builddep $CI_WORKSPACE/packages/scenefx/scenefx.spec
+      - runuser -u builder -- rpmbuild --define "_topdir $CI_WORKSPACE/_build" -ba $CI_WORKSPACE/packages/scenefx/scenefx.spec
+
+      # mangowm BuildRequires scenefx-devel. Install what we just built, minus the
+      # debug packages, which nothing needs and which drag in extra deps.
+      - dnf -y install $(ls $CI_WORKSPACE/_build/RPMS/x86_64/*.rpm | grep -v -- -debug)
+
+      - runuser -u builder -- spectool --define "_topdir $CI_WORKSPACE/_build" --get-files --sourcedir $CI_WORKSPACE/packages/mangowm/mangowm.spec
+      - dnf -y builddep $CI_WORKSPACE/packages/mangowm/mangowm.spec
+      - runuser -u builder -- rpmbuild --define "_topdir $CI_WORKSPACE/_build" -ba $CI_WORKSPACE/packages/mangowm/mangowm.spec
+
+      # The whole claim of this workflow, in one command. If a future edit
+      # reintroduces a root write into the build tree, this fails here rather than
+      # silently producing a package built with the wrong privileges.
+      - if [ -n "$(find $CI_WORKSPACE/_build ! -user builder -print -quit)" ]; then echo 'ERROR - root-owned files in _build; something ran privileged' >&2; find $CI_WORKSPACE/_build ! -user builder -ls | head >&2; exit 1; fi
+
+      - cp $CI_WORKSPACE/_build/RPMS/*/*.rpm $CI_WORKSPACE/_build/SRPMS/*.rpm $CI_WORKSPACE/output/
+      - sha256sum $CI_WORKSPACE/output/*.rpm

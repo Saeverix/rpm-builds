@@ -61,6 +61,15 @@ distro package.
 `scenefx` exists here only because `mangowm` links against it, so the two share
 one workflow.
 
+The pair is the first package moved to Woodpecker (`.woodpecker/mangowm.yaml`), and
+it no longer uses tags or GitHub Releases. A push to `main` that touches
+`packages/mangowm/` or `packages/scenefx/` builds both; the spec's NVR is the
+identity. **For now it only builds** — nothing is signed or published, so a bump
+does not reach dnf clients, and `rpm.vries.cloud` keeps serving the last released
+`mangowm`. When changing `scenefx`, bump `mangowm`'s `Release` as well, the same
+rule as the hyprland stack: once publishing exists, the pair is identified by
+`mangowm`'s NVR.
+
 `fish` is here because Fedora 44 ships 4.6.0. It is a Rust build, and its release
 tarball contains no vendored crates, so the workflow runs `cargo vendor` and
 hands the result to the spec as `Source3`; `%build` then runs with
@@ -121,7 +130,7 @@ Unlike `noctalia`, upstream creates no GitHub Releases for this repo -- only tag
 Its `meson.build` has no `vcs_tag()` call and no `test()` targets at all, so unlike
 `noctalia` it needs neither `GIT_CEILING_DIRECTORIES` fencing nor a `%check`
 section -- `build-noctalia-greeter.yml` does not install `git-core` at all, closer
-to how `build-mangowm.yml` leaves git out. `PACKAGING.md` calls `libwebp` optional
+to how `.woodpecker/mangowm.yaml` leaves git out. `PACKAGING.md` calls `libwebp` optional
 ("only if you ship the matching feature"), but `meson.build` asks for it with
 `required: true` -- the spec treats it as a real `BuildRequires`, not a maybe.
 
@@ -297,6 +306,7 @@ compiler on every installed system. Plugins can still be built by hand against
 ```
 .github/workflows/build-<name>.yml   one workflow per thing you want to build
 .github/workflows/publish-pages.yml  turns GitHub Releases into the dnf repo
+.woodpecker/<name>.yaml              Woodpecker pipeline (mangowm so far), build only
 packages/<name>/<name>.spec          one directory per source package
 repo/                                client-facing files served alongside the repo
 ```
@@ -352,7 +362,7 @@ steps in a workflow, and dependencies are whatever that workflow installs.
 ## Adding a package
 
 1. `packages/<name>/<name>.spec`
-2. `.github/workflows/build-<name>.yml` — copy an existing one (`build-mangowm.yml`
+2. `.github/workflows/build-<name>.yml` — copy an existing one (`build-noctalia-greeter.yml`
    for a simple single-distro package) and change the spec paths and the tag
    prefix in `on.push.tags` and `on.pull_request.paths`.
 
@@ -375,7 +385,7 @@ podman run --rm -v "$PWD:/w:Z" -w /w registry.fedoraproject.org/fedora:44 sh -c 
   dnf -y install python3-pyyaml >/dev/null 2>&1
   python3 - <<PY > /tmp/steps.sh
 import yaml
-steps = yaml.safe_load(open(".github/workflows/build-mangowm.yml"))["jobs"]["build"]["steps"]
+steps = yaml.safe_load(open(".github/workflows/build-noctalia-greeter.yml"))["jobs"]["build"]["steps"]
 print("set -ex")
 for name in ("prepare build environment", "build"):
     print(next(s for s in steps if s.get("name") == name)["run"])
@@ -446,8 +456,6 @@ Tag names decide what publishes, and the prefix must match the workflow's
 | Tag | Publishes |
 | --- | --- |
 | `fish-4.8.1-1` | `fish` for **both** Fedora 44 and AlmaLinux 10 |
-| `mangowm-0.15.6-1` | `mangowm` and `scenefx` |
-| `scenefx-0.5.0-1` | `mangowm` and `scenefx` |
 | `noctalia-5.0.0-beta.7-1` | `noctalia` |
 | `noctalia-greeter-1.3.1-1` | `noctalia-greeter` |
 | `hyprland-0.56.2-1` | `hyprland` and the nine libraries it needs |
@@ -466,7 +474,7 @@ that runs only once both have succeeded, so a tag cannot end up half-released �
 either both RPMs land on the GitHub Release, or neither does.
 
 If a tagged build fails, fix the spec and tag again with `Release` bumped — e.g.
-`mangowm-0.15.6-2`. Prefer a new tag over force-pushing the existing one: a moved
+`noctalia-5.2.0-2`. Prefer a new tag over force-pushing the existing one: a moved
 tag no longer identifies what is in the repo, even though GitHub Actions itself
 will happily rebuild on a force-pushed tag.
 
@@ -495,15 +503,15 @@ distro tree's `repomd.xml` separately, in the same loop that runs `createrepo_c`
 over it.
 
 The client-facing files are checked into this repo, under `repo/`:
-`saeverix.repo`, `saeverix-almalinux.repo`, `index.html` and the committed public
-key `RPM-GPG-KEY-saeverix`. `publish-pages.yml` copies the first three into the
+`vries-cloud.repo`, `vries-cloud-almalinux.repo`, `index.html` and the committed public
+key `RPM-GPG-KEY-vries-cloud`. `publish-pages.yml` copies the first three into the
 generated site as-is and cross-checks the committed public key's fingerprint
 against the one it just signed with, so the two cannot silently drift apart.
 Installing on a Fedora box:
 
 ```sh
-sudo curl -o /etc/yum.repos.d/saeverix.repo https://rpm.vries.cloud/saeverix.repo
-sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-saeverix
+sudo curl -o /etc/yum.repos.d/vries-cloud.repo https://rpm.vries.cloud/vries-cloud.repo
+sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-vries-cloud
 sudo dnf install mangowm fish
 ```
 

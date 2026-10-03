@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Saeverix RPM repository</title>
+<title>vries.cloud RPM repository</title>
 <style>
   :root { color-scheme: light dark; --fg: #1a1a1a; --bg: #fdfdfc; --muted: #5c5c58;
           --line: #dcdcd8; --code-bg: #f2f2ef; }
@@ -34,27 +34,27 @@
 </head>
 <body>
 
-<h1>Saeverix RPM repository</h1>
+<h1>vries.cloud RPM repository</h1>
 <p class="sub">RPMs for tools that Fedora does not package, or ships too old. Built and
 signed by GitHub Actions from
 <a href="https://github.com/Saeverix/rpm-builds">Saeverix/rpm-builds</a>.</p>
 
 <h2>Install on Fedora</h2>
-<pre><code>sudo curl -o /etc/yum.repos.d/saeverix.repo \
-  https://rpm.vries.cloud/saeverix.repo
-sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-saeverix
+<pre><code>sudo curl -o /etc/yum.repos.d/vries-cloud.repo \
+  https://rpm.vries.cloud/vries-cloud.repo
+sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-vries-cloud
 sudo dnf install mangowm</code></pre>
 
 <h2>Install on AlmaLinux 10</h2>
-<pre><code>sudo curl -o /etc/yum.repos.d/saeverix.repo \
-  https://rpm.vries.cloud/saeverix-almalinux.repo
-sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-saeverix
+<pre><code>sudo curl -o /etc/yum.repos.d/vries-cloud.repo \
+  https://rpm.vries.cloud/vries-cloud-almalinux.repo
+sudo rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-vries-cloud
 sudo dnf install fish</code></pre>
 
 <h2>Use in a Fedora Atomic / bootc image</h2>
-<pre><code>RUN curl -o /etc/yum.repos.d/saeverix.repo \
-      https://rpm.vries.cloud/saeverix.repo &amp;&amp; \
-    rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-saeverix &amp;&amp; \
+<pre><code>RUN curl -o /etc/yum.repos.d/vries-cloud.repo \
+      https://rpm.vries.cloud/vries-cloud.repo &amp;&amp; \
+    rpm --import https://rpm.vries.cloud/RPM-GPG-KEY-vries-cloud &amp;&amp; \
     dnf -y install mangowm &amp;&amp; \
     dnf clean all</code></pre>
 <p>The repo files set <code>skip_if_unavailable=0</code> on purpose, so an unreachable
@@ -74,7 +74,7 @@ packages.</p>
 <p>Every package is signed, and <code>repomd.xml</code> carries a detached signature, so
 the repo files enable both <code>gpgcheck</code> and <code>repo_gpgcheck</code>.</p>
 <p class="fpr">2BE1 5FF9 C232 EAC2 4237&nbsp; DC91 2AC7 5B07 5AFD 843E</p>
-<p><a href="RPM-GPG-KEY-saeverix">RPM-GPG-KEY-saeverix</a></p>
+<p><a href="RPM-GPG-KEY-vries-cloud">RPM-GPG-KEY-vries-cloud</a></p>
 
 <footer>
   The three newest builds of each package are kept, so a bad bump can be downgraded
