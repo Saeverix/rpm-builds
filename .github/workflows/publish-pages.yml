@@ -169,10 +169,10 @@ jobs:
             test -s "$dir/repodata/repomd.xml.asc"
           done
 
-          gpg --export --armor "$FPR" > site/RPM-GPG-KEY-saeverix
+          gpg --export --armor "$FPR" > site/RPM-GPG-KEY-vries-cloud
 
           # The key that signs the metadata must be the key clients are told to trust.
-          # If repo/RPM-GPG-KEY-saeverix ever drifts from the signing secret, every
+          # If repo/RPM-GPG-KEY-vries-cloud ever drifts from the signing secret, every
           # client fails `dnf makecache` with an unhelpful error -- catch it here.
           #
           # Compared by FINGERPRINT rather than by diffing the two files, for two
@@ -182,10 +182,10 @@ jobs:
           # output is not byte-stable regardless: gpg can emit different version
           # headers or comments for an identical key, so the file comparison could fail
           # while the key is perfectly correct.
-          COMMITTED=$(gpg --show-keys --with-colons repo/RPM-GPG-KEY-saeverix \
+          COMMITTED=$(gpg --show-keys --with-colons repo/RPM-GPG-KEY-vries-cloud \
             | awk -F':' '/^fpr/{print $10; exit}')
           if [ "$COMMITTED" != "$FPR" ]; then
-            echo 'ERROR: RPM_GPG_KEY does not match repo/RPM-GPG-KEY-saeverix' >&2
+            echo 'ERROR: RPM_GPG_KEY does not match repo/RPM-GPG-KEY-vries-cloud' >&2
             echo "  committed: ${COMMITTED:-<no fingerprint found>}" >&2
             echo "  signing:   $FPR" >&2
             exit 1
@@ -194,7 +194,7 @@ jobs:
       - name: add the client-facing files
         run: |
           set -eux
-          cp repo/saeverix.repo repo/saeverix-almalinux.repo repo/index.html site/
+          cp repo/vries-cloud.repo repo/vries-cloud-almalinux.repo repo/index.html site/
           # The public key is already in site/, exported from the signing key above and
           # diffed against the committed copy, so it is deliberately not copied here.
           find site -maxdepth 1 -type f | sort
